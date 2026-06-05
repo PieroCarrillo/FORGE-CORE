@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Componentes reutilizables de formulario. Se declaran aqui para no repetir muchas clases Tailwind en App.tsx. */
+@layer components {
+  .field-control {
+    @apply mt-2 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-white outline-none transition placeholder:text-white/30 focus:border-cyan-200/60 focus:bg-black/45;
+  }
+
+  select.field-control {
+    @apply text-white;
+  }
+
+  select.field-control option {
+    background: #11151d;
+    color: #f6f7fb;
+  }
+}
+
+/* Ajustes globales basicos de la SPA. */
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: #0f1117;
+  color: #f6f7fb;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+button,
+a {
+  /* Elimina el flash azul/gris al tocar botones en navegadores moviles. */
+  -webkit-tap-highlight-color: transparent;
+}

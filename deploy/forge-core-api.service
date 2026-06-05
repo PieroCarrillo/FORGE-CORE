@@ -1,0 +1,23 @@
+[Unit]
+Description=FORGE CORE Express API
+# Espera a que la red este disponible antes de iniciar la API.
+After=network.target
+
+[Service]
+Type=simple
+# Carpeta donde queda compilado el backend en AWS.
+WorkingDirectory=/opt/forge-core/backend
+# Variables de entorno: puerto, CORS y credenciales MariaDB.
+EnvironmentFile=/opt/forge-core/backend/.env
+# Ejecuta el JavaScript compilado por TypeScript.
+ExecStart=/usr/bin/node dist/server.js
+# Reinicia automaticamente si el proceso se cae.
+Restart=always
+RestartSec=5
+# Usuario sin privilegios usado para correr la API.
+User=forge
+Group=forge
+
+[Install]
+# Hace que el servicio arranque con el sistema.
+WantedBy=multi-user.target

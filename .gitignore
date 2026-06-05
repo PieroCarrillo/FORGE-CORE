@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build outputs
+dist/
+backend/dist/
+frontend/dist/
+*.tsbuildinfo
+frontend/.vite/
+frontend/vite.config.js
+frontend/vite.config.d.ts
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!.env.aws.example
+
+# Local logs and temporary output
+*.log
+*.err.log
+~$*
+outputs/
+pdf_inspection/
+.tools/
+.DS_Store
+coverage/
+
+# Local generated packages/previews
+*.tar
+*.tar.gz
+*.zip
+frontend-preview.png
+frontend-mobile-admin.png
+product-images-preview.png
