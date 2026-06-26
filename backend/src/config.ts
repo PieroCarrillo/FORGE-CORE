@@ -16,5 +16,9 @@ export const config = {
     password: process.env.DB_PASSWORD ?? '',
     database: process.env.DB_NAME ?? 'forge_core'
   },
+  mongodb: {
+    uri: process.env.MONGODB_URI ?? '',
+    database: process.env.MONGODB_DB ?? 'forge_core'
+  },
   metricsIntervalSeconds: Number(process.env.METRICS_INTERVAL_SECONDS ?? 30)
 };

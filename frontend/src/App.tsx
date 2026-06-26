@@ -11,6 +11,7 @@ import {
   LogOut,
   Mail,
   MemoryStick,
+  MessageSquare,
   Minus,
   MonitorCog,
   PackageCheck,
@@ -21,6 +22,7 @@ import {
   ShoppingCart,
   Sparkles,
   Star,
+  ThumbsUp,
   Trash2,
   Truck,
   UserCircle,
@@ -30,7 +32,7 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 
-type View = 'inicio' | 'catalogo' | 'detalle' | 'carrito' | 'perfil' | 'admin';
+type View = 'inicio' | 'catalogo' | 'detalle' | 'carrito' | 'comunidad' | 'perfil' | 'admin';
 type Category = 'GPU' | 'RAM' | 'CPU' | 'SSD' | 'Fuente';
 type UserRole = 'admin' | 'customer';
 
@@ -74,6 +76,21 @@ type OrderSummary = {
   created_at?: string;
 };
 
+type ProductReview = {
+  id: string;
+  userId: number;
+  userName: string;
+  productId: number;
+  productName: string;
+  rating: number;
+  title: string;
+  comment: string;
+  verifiedPurchase: boolean;
+  helpfulCount: number;
+  status: 'published' | 'hidden';
+  createdAt: string;
+};
+
 type SystemMetric = {
   cpu_percent: string;
   memory_percent: string;
@@ -114,6 +131,13 @@ type AuthForm = {
   username: string;
   email: string;
   password: string;
+};
+
+type ReviewForm = {
+  productId: string;
+  rating: string;
+  title: string;
+  comment: string;
 };
 
 const videoUrl =
@@ -255,6 +279,18 @@ function App() {
   const [dashboard, setDashboard] = useState<AdminDashboard | null>(null);
   const [accountOrders, setAccountOrders] = useState<OrderSummary[]>([]);
   const [adminUsers, setAdminUsers] = useState<AuthUser[]>([]);
+  const [productReviews, setProductReviews] = useState<ProductReview[]>([]);
+  const [communityReviews, setCommunityReviews] = useState<ProductReview[]>([]);
+  const [accountReviews, setAccountReviews] = useState<ProductReview[]>([]);
+  const [adminReviews, setAdminReviews] = useState<ProductReview[]>([]);
+  const [reviewForm, setReviewForm] = useState<ReviewForm>({
+    productId: String(seedProducts[0].id),
+    rating: '5',
+    title: '',
+    comment: ''
+  });
+  const [reviewStatus, setReviewStatus] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle');
+  const [reviewMessage, setReviewMessage] = useState('');
   const [carouselIndex, setCarouselIndex] = useState(0);
   const [authToken, setAuthToken] = useState(() => window.localStorage.getItem('forge_core_token') ?? '');
   const [authUser, setAuthUser] = useState<AuthUser | null>(() => {
@@ -321,6 +357,10 @@ function App() {
     setLatestMetric(null);
     setAdminUsers([]);
     setAccountOrders([]);
+    setAccountReviews([]);
+    setAdminReviews([]);
+    setCommunityReviews([]);
+    setProductReviews([]);
     setView('inicio');
     window.localStorage.removeItem('forge_core_token');
     window.localStorage.removeItem('forge_core_user');
@@ -380,7 +420,20 @@ function App() {
   useEffect(() => {
     if (!authUser) return;
     void loadAccountOrders();
+    void loadAccountReviews();
+    void loadCommunityReviews();
   }, [authToken, authUser?.id]);
+
+  useEffect(() => {
+    if (!authUser || !selected?.id) return;
+    void loadProductReviews(selected.id);
+  }, [authToken, authUser?.id, selected?.id]);
+
+  useEffect(() => {
+    if (!authUser || !productList.length) return;
+    setReviewForm((form) => ({ ...form, productId: form.productId || String(productList[0].id) }));
+    void loadCommunityReviews();
+  }, [authToken, authUser?.id, productList.length]);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -405,6 +458,10 @@ function App() {
         if (usersResponse.ok) {
           const users = (await usersResponse.json()) as AuthUser[];
           if (!cancelled) setAdminUsers(users);
+        }
+        const reviewsResponse = await apiFetch('/api/admin/reviews');
+        if (reviewsResponse.ok && !cancelled) {
+          setAdminReviews((await reviewsResponse.json()) as ProductReview[]);
         }
       } catch {
         if (!cancelled) setLatestMetric(null);
@@ -446,6 +503,36 @@ function App() {
       setAccountOrders((await response.json()) as OrderSummary[]);
     } catch {
       setAccountOrders([]);
+    }
+  }
+
+  async function loadProductReviews(productId: number) {
+    try {
+      const response = await fetch(`/api/products/${productId}/reviews`);
+      if (!response.ok) return;
+      setProductReviews((await response.json()) as ProductReview[]);
+    } catch {
+      setProductReviews([]);
+    }
+  }
+
+  async function loadCommunityReviews() {
+    try {
+      const responses = await Promise.all(productList.slice(0, 12).map((product) => fetch(`/api/products/${product.id}/reviews`)));
+      const groups = await Promise.all(responses.filter((response) => response.ok).map((response) => response.json() as Promise<ProductReview[]>));
+      setCommunityReviews(groups.flat().sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+    } catch {
+      setCommunityReviews([]);
+    }
+  }
+
+  async function loadAccountReviews() {
+    try {
+      const response = await apiFetch('/api/account/reviews');
+      if (!response.ok) return;
+      setAccountReviews((await response.json()) as ProductReview[]);
+    } catch {
+      setAccountReviews([]);
     }
   }
 
@@ -616,6 +703,58 @@ function App() {
     });
   }
 
+  async function submitReview(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setReviewStatus('saving');
+    setReviewMessage('');
+
+    try {
+      const productId = Number(reviewForm.productId);
+      const response = await apiFetch(`/api/products/${productId}/reviews`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rating: Number(reviewForm.rating),
+          title: reviewForm.title,
+          comment: reviewForm.comment
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error ?? 'No se pudo guardar la reseña');
+      }
+
+      setReviewStatus('saved');
+      setReviewMessage('Reseña guardada en MongoDB Atlas.');
+      setReviewForm((form) => ({ ...form, title: '', comment: '', rating: '5' }));
+      await Promise.all([loadProductReviews(selected.id), loadCommunityReviews(), loadAccountReviews()]);
+    } catch (error) {
+      setReviewStatus('failed');
+      setReviewMessage(error instanceof Error ? error.message : 'No se pudo guardar la reseña');
+    }
+  }
+
+  async function markReviewHelpful(reviewId: string) {
+    try {
+      const response = await apiFetch(`/api/reviews/${reviewId}/helpful`, { method: 'POST' });
+      if (!response.ok) return;
+      await Promise.all([loadProductReviews(selected.id), loadCommunityReviews(), loadAccountReviews()]);
+    } catch {
+      // La accion de utilidad es secundaria: si falla, la UI se mantiene estable.
+    }
+  }
+
+  async function hideReview(reviewId: string) {
+    try {
+      const response = await apiFetch(`/api/admin/reviews/${reviewId}`, { method: 'DELETE' });
+      if (!response.ok) return;
+      setAdminReviews((reviews) => reviews.map((review) => (review.id === reviewId ? { ...review, status: 'hidden' } : review)));
+      await loadCommunityReviews();
+    } catch {
+      // Moderacion silenciosa para no romper el panel admin.
+    }
+  }
+
   async function simulatePayment() {
     setPaymentStatus('processing');
     setPaymentMessage('');
@@ -648,6 +787,7 @@ function App() {
   const navItems: Array<{ label: string; view: View }> = [
     { label: 'Inicio', view: 'inicio' },
     { label: 'Productos', view: 'catalogo' },
+    { label: 'Comunidad', view: 'comunidad' },
     { label: 'Carrito', view: 'carrito' },
     { label: 'Perfil', view: 'perfil' },
     ...(isAdmin ? [{ label: 'Admin', view: 'admin' as View }] : [])
@@ -868,6 +1008,46 @@ function App() {
                   </div>
                 </div>
               </div>
+
+              <div className="mt-5 grid gap-5 lg:grid-cols-[0.85fr_1.15fr]">
+                <div className="rounded-lg border border-white/10 bg-black/[0.42] p-5 backdrop-blur">
+                  <p className="text-xs uppercase tracking-[0.2em] text-cyan-200">Resenas del producto</p>
+                  <div className="mt-3 flex items-end gap-3">
+                    <p className="text-4xl font-semibold">{averageRating(productReviews)}</p>
+                    <div className="pb-1">
+                      <ReviewStars rating={Number(averageRating(productReviews)) || selected.rating} />
+                      <p className="mt-1 text-sm text-white/50">{productReviews.length} comentarios en MongoDB</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setReviewForm((form) => ({ ...form, productId: String(selected.id) }));
+                      setView('comunidad');
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                    className="mt-5 inline-flex items-center gap-2 rounded-full bg-cyan-300 px-4 py-2 text-sm font-semibold text-black transition hover:bg-cyan-200"
+                  >
+                    <MessageSquare className="h-4 w-4" />
+                    Escribir resena
+                  </button>
+                </div>
+                <div className="rounded-lg border border-white/10 bg-[#11151d]/[0.92] p-5">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xl font-semibold">Opiniones recientes</h3>
+                    <span className="rounded-full border border-cyan-200/20 px-3 py-1 text-xs uppercase tracking-[0.16em] text-cyan-100">MongoDB</span>
+                  </div>
+                  <div className="mt-4 grid gap-3">
+                    {productReviews.slice(0, 3).map((review) => (
+                      <ReviewCard key={review.id} review={review} compact onHelpful={markReviewHelpful} />
+                    ))}
+                    {!productReviews.length && (
+                      <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4 text-sm text-white/55">
+                        Este producto aun no tiene resenas. Puedes crear la primera desde Comunidad.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
             </section>
           )}
 
@@ -1008,9 +1188,103 @@ function App() {
             </section>
           )}
 
+          {view === 'comunidad' && (
+            <section className="px-5 py-10 sm:px-10 lg:px-16">
+              <SectionHeader eyebrow="Comunidad con MongoDB Atlas" title="Resenas reales por usuario registrado" />
+              <div className="mt-8 grid gap-5 lg:grid-cols-[420px_1fr]">
+                <form onSubmit={submitReview} className="h-fit rounded-lg border border-white/10 bg-[#11151d]/[0.94] p-5 shadow-glow">
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="flex items-center gap-2 text-xl font-semibold">
+                      <MessageSquare className="h-5 w-5 text-cyan-200" />
+                      Nueva resena
+                    </h3>
+                    <span className="rounded-full border border-cyan-200/20 px-3 py-1 text-xs uppercase tracking-[0.16em] text-cyan-100">MongoDB</span>
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-white/55">
+                    Estas opiniones se guardan separadas de MariaDB para demostrar una base NoSQL dedicada a comunidad.
+                  </p>
+
+                  <div className="mt-5 grid gap-3">
+                    <AdminField label="Producto">
+                      <select value={reviewForm.productId} onChange={(event) => setReviewForm((form) => ({ ...form, productId: event.target.value }))} className="field-control">
+                        {productList.map((product) => (
+                          <option key={product.id} value={product.id}>
+                            {product.name}
+                          </option>
+                        ))}
+                      </select>
+                    </AdminField>
+                    <AdminField label="Calificacion">
+                      <select value={reviewForm.rating} onChange={(event) => setReviewForm((form) => ({ ...form, rating: event.target.value }))} className="field-control">
+                        <option value="5">5 estrellas</option>
+                        <option value="4">4 estrellas</option>
+                        <option value="3">3 estrellas</option>
+                        <option value="2">2 estrellas</option>
+                        <option value="1">1 estrella</option>
+                      </select>
+                    </AdminField>
+                    <AdminField label="Titulo">
+                      <input
+                        required
+                        minLength={3}
+                        maxLength={90}
+                        value={reviewForm.title}
+                        onChange={(event) => setReviewForm((form) => ({ ...form, title: event.target.value }))}
+                        className="field-control"
+                        placeholder="Buena compra para gaming"
+                      />
+                    </AdminField>
+                    <label>
+                      <span className="text-xs uppercase tracking-[0.16em] text-white/45">Comentario</span>
+                      <textarea
+                        required
+                        minLength={8}
+                        maxLength={1200}
+                        value={reviewForm.comment}
+                        onChange={(event) => setReviewForm((form) => ({ ...form, comment: event.target.value }))}
+                        className="field-control mt-2 min-h-32 resize-none"
+                        placeholder="Cuenta tu experiencia con el producto..."
+                      />
+                    </label>
+                  </div>
+
+                  <button disabled={reviewStatus === 'saving'} className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-full bg-cyan-300 px-5 py-3 font-semibold text-black transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-60">
+                    <MessageSquare className="h-4 w-4" />
+                    {reviewStatus === 'saving' ? 'Guardando...' : 'Publicar resena'}
+                  </button>
+                  {reviewMessage && (
+                    <p className={`mt-4 rounded-lg border p-3 text-sm ${reviewStatus === 'saved' ? 'border-lime-300/40 bg-lime-300/10 text-lime-100' : 'border-red-300/40 bg-red-300/10 text-red-100'}`}>
+                      {reviewMessage}
+                    </p>
+                  )}
+                </form>
+
+                <div className="rounded-lg border border-white/10 bg-black/[0.38] p-5 backdrop-blur">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <h3 className="text-2xl font-semibold">Feed de compradores</h3>
+                      <p className="mt-1 text-sm text-white/50">Comentarios tipo marketplace con compra verificada cuando aplica.</p>
+                    </div>
+                    <button onClick={loadCommunityReviews} className="rounded-full border border-white/10 px-4 py-2 text-sm text-white/70 hover:bg-white/10">Actualizar</button>
+                  </div>
+                  <div className="mt-5 grid gap-3 xl:grid-cols-2">
+                    {communityReviews.map((review) => (
+                      <ReviewCard key={review.id} review={review} onHelpful={markReviewHelpful} />
+                    ))}
+                    {!communityReviews.length && (
+                      <div className="rounded-lg border border-white/10 bg-white/[0.04] p-5 text-sm leading-6 text-white/55 xl:col-span-2">
+                        Todavia no hay resenas publicadas. Cuando configures MongoDB Atlas y un cliente publique una opinion, aparecera aqui.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
+
           {view === 'perfil' && (
             <section className="px-5 py-10 sm:px-10 lg:px-16">
-              <SectionHeader eyebrow="Perfil del comprador" title="Cuenta, rol y ultimos pedidos registrados en MariaDB" />
+              <SectionHeader eyebrow="Perfil del comprador" title="Cuenta, pedidos en MariaDB y resenas en MongoDB" />
               <div className="mt-8 grid gap-5 lg:grid-cols-[0.85fr_1.15fr]">
                 <div className="h-fit rounded-lg border border-white/10 bg-[#11151d]/[0.92] p-5">
                   <div className="flex items-center gap-4">
@@ -1043,6 +1317,22 @@ function App() {
                     ))}
                     {!accountOrders.length && <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4 text-sm text-white/55">Todavia no hay pedidos para este usuario.</div>}
                   </div>
+
+                  <div className="my-5 h-px bg-white/10" />
+
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="flex items-center gap-2 text-xl font-semibold">
+                      <MessageSquare className="h-5 w-5 text-cyan-200" />
+                      Mis resenas
+                    </h3>
+                    <button onClick={loadAccountReviews} className="rounded-full border border-white/10 px-3 py-1.5 text-sm text-white/70 hover:bg-white/10">Actualizar</button>
+                  </div>
+                  <div className="mt-5 space-y-3">
+                    {accountReviews.map((review) => (
+                      <ReviewCard key={review.id} review={review} compact onHelpful={markReviewHelpful} />
+                    ))}
+                    {!accountReviews.length && <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4 text-sm text-white/55">Aun no publicaste resenas.</div>}
+                  </div>
                 </div>
               </div>
             </section>
@@ -1055,7 +1345,7 @@ function App() {
                 <Metric label="Ventas simuladas" value={`$${formatMoney(dashboard?.summary.simulated_revenue ?? dashboard?.summary.total_revenue ?? 0)}`} icon={<BarChart3 className="h-5 w-5" />} />
                 <Metric label="Pedidos BD" value={String(dashboard?.summary.order_count ?? dashboard?.summary.total_orders ?? 0)} icon={<ShoppingCart className="h-5 w-5" />} />
                 <Metric label="Usuarios" value={String(adminUsers.length)} icon={<Users className="h-5 w-5" />} />
-                <Metric label="Productos activos" value={String(dashboard?.summary.active_products ?? productList.length)} icon={<Database className="h-5 w-5" />} />
+                <Metric label="Resenas MongoDB" value={String(adminReviews.length)} icon={<MessageSquare className="h-5 w-5" />} />
               </div>
 
               <div className="mt-5 grid gap-5 lg:grid-cols-[1fr_0.9fr]">
@@ -1167,6 +1457,37 @@ function App() {
                       ))}
                     </div>
                   </div>
+                </div>
+              </div>
+
+              <div className="mt-5 rounded-lg border border-white/10 bg-[#11151d]/[0.92] p-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="flex items-center gap-2 text-xl font-semibold">
+                      <ShieldCheck className="h-5 w-5 text-cyan-200" />
+                      Moderacion de comunidad
+                    </h3>
+                    <p className="mt-1 text-sm text-white/50">Documentos de MongoDB Atlas: publicados, ocultos y utiles.</p>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      const response = await apiFetch('/api/admin/reviews');
+                      if (response.ok) setAdminReviews((await response.json()) as ProductReview[]);
+                    }}
+                    className="rounded-full border border-white/10 px-4 py-2 text-sm text-white/70 hover:bg-white/10"
+                  >
+                    Actualizar
+                  </button>
+                </div>
+                <div className="mt-5 grid gap-3 lg:grid-cols-2">
+                  {adminReviews.slice(0, 8).map((review) => (
+                    <ReviewCard key={review.id} review={review} onHide={hideReview} />
+                  ))}
+                  {!adminReviews.length && (
+                    <div className="rounded-lg border border-white/10 bg-white/[0.04] p-5 text-sm text-white/55 lg:col-span-2">
+                      Sin resenas en MongoDB por ahora.
+                    </div>
+                  )}
                 </div>
               </div>
             </section>
@@ -1292,6 +1613,67 @@ function OrderRow({ order }: { order: OrderSummary }) {
   );
 }
 
+function ReviewStars({ rating }: { rating: number }) {
+  return (
+    <div className="flex items-center gap-1 text-amber-200">
+      {Array.from({ length: 5 }, (_, index) => (
+        <Star key={index} className={`h-4 w-4 ${index < Math.round(rating) ? 'fill-current' : 'opacity-30'}`} />
+      ))}
+    </div>
+  );
+}
+
+function ReviewCard({
+  review,
+  compact = false,
+  onHelpful,
+  onHide
+}: {
+  review: ProductReview;
+  compact?: boolean;
+  onHelpful?: (reviewId: string) => void;
+  onHide?: (reviewId: string) => void;
+}) {
+  return (
+    <article className={`rounded-lg border border-white/10 bg-white/[0.06] ${compact ? 'p-3' : 'p-4'}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <ReviewStars rating={review.rating} />
+            {review.verifiedPurchase && (
+              <span className="rounded-full bg-lime-300 px-2 py-0.5 text-[11px] font-semibold text-black">Compra verificada</span>
+            )}
+            {review.status === 'hidden' && (
+              <span className="rounded-full bg-red-300 px-2 py-0.5 text-[11px] font-semibold text-black">Oculta</span>
+            )}
+          </div>
+          <h4 className="mt-2 font-semibold text-white">{review.title}</h4>
+        </div>
+        <span className="shrink-0 text-xs text-white/40">{formatReviewDate(review.createdAt)}</span>
+      </div>
+      <p className="mt-1 text-xs uppercase tracking-[0.16em] text-cyan-100/55">{review.productName}</p>
+      <p className={`${compact ? 'mt-2 line-clamp-2' : 'mt-3'} text-sm leading-6 text-white/65`}>{review.comment}</p>
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+        <span className="text-sm text-white/45">Por {review.userName}</span>
+        <div className="flex items-center gap-2">
+          {onHelpful && review.status === 'published' && (
+            <button onClick={() => onHelpful(review.id)} className="inline-flex items-center gap-1 rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/70 hover:bg-white/10">
+              <ThumbsUp className="h-3.5 w-3.5" />
+              Util {review.helpfulCount}
+            </button>
+          )}
+          {onHide && review.status === 'published' && (
+            <button onClick={() => onHide(review.id)} className="inline-flex items-center gap-1 rounded-full border border-red-300/30 px-3 py-1.5 text-xs text-red-100 hover:bg-red-500/10">
+              <Trash2 className="h-3.5 w-3.5" />
+              Ocultar
+            </button>
+          )}
+        </div>
+      </div>
+    </article>
+  );
+}
+
 function normalizeProduct(product: Omit<Product, 'accent'> & { accent?: string }, index: number): Product {
   const known = seedProducts.find((item) => item.slug === product.slug);
   const category = categories.includes(product.category as Category) ? (product.category as Category) : 'GPU';
@@ -1310,6 +1692,16 @@ function formatNumber(value: number | string) {
 
 function formatMoney(value: number | string) {
   return Number(value).toLocaleString('en-US', { maximumFractionDigits: 0 });
+}
+
+function formatReviewDate(value: string) {
+  return new Date(value).toLocaleDateString('es-PE', { day: '2-digit', month: 'short' });
+}
+
+function averageRating(reviews: ProductReview[]) {
+  if (!reviews.length) return '0.0';
+  const total = reviews.reduce((sum, review) => sum + review.rating, 0);
+  return (total / reviews.length).toFixed(1);
 }
 
 function makeSlug(value: string) {

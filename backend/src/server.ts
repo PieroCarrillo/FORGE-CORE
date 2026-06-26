@@ -1,28 +1,36 @@
 import cors from 'cors';
 import express from 'express';
+import { ObjectId } from 'mongodb';
 import type { RowDataPacket } from 'mysql2';
 import { AuthRequest, createSessionToken, hashPassword, publicUser, requireAdmin, requireAuth, verifyPassword } from './auth.js';
 import { config } from './config.js';
 import { pool, ProductRow, toProduct } from './db.js';
 import {
   authenticateLocalUser,
+  createLocalReview,
   createLocalProduct,
   createLocalSimulatedOrder,
   createLocalUser,
   getLocalDashboard,
   getLocalProductBySlug,
+  hideLocalReview,
+  listLocalAdminReviews,
   listLocalUsers,
   listLocalCategories,
   listLocalMetrics,
   listLocalOrdersForUser,
+  listLocalReviews,
+  listLocalReviewsForUser,
   listLocalProducts,
   logoutLocalUser,
+  markHelpfulLocalReview,
   quoteLocalOrder,
   restockLocalProduct,
   updateLocalProduct
 } from './localStore.js';
 import { startMetricsWorker } from './metrics.js';
-import { parseLoginPayload, parseOrderItems, parsePositiveInteger, parseProductPayload, parseRegisterPayload } from './validation.js';
+import { getReviewsCollection, isMongoConfigured, ProductReviewDocument, toReviewResponse } from './mongo.js';
+import { parseLoginPayload, parseOrderItems, parsePositiveInteger, parseProductPayload, parseRegisterPayload, parseReviewPayload } from './validation.js';
 
 type QuoteProductRow = RowDataPacket & {
   id: number;
@@ -41,11 +49,40 @@ type LoginUserRow = RowDataPacket & {
   password_salt: string;
 };
 
+type ProductNameRow = RowDataPacket & {
+  id: number;
+  name: string;
+};
+
 const app = express();
 
 // Middlewares globales: CORS para el frontend y JSON para recibir payloads.
 app.use(cors({ origin: config.frontendOrigin }));
 app.use(express.json({ limit: '1mb' }));
+
+async function getProductName(productId: number) {
+  const [rows] = await pool.query<ProductNameRow[]>(
+    'SELECT id, name FROM products WHERE id = ? AND active = 1 LIMIT 1',
+    [productId]
+  );
+  return rows[0]?.name ?? '';
+}
+
+async function hasVerifiedPurchase(userId: number, userEmail: string, productId: number) {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `
+      SELECT oi.id
+      FROM orders o
+      JOIN order_items oi ON oi.order_id = o.id
+      WHERE (o.user_id = ? OR o.customer_email = ?)
+        AND oi.product_id = ?
+        AND o.status = 'paid_simulated'
+      LIMIT 1
+    `,
+    [userId, userEmail, productId]
+  );
+  return rows.length > 0;
+}
 
 // Healthcheck usado para comprobar si backend y MariaDB estan disponibles.
 app.get('/api/health', async (_req, res) => {
@@ -250,6 +287,87 @@ app.get('/api/products/:slug', async (req, res, next) => {
   }
 });
 
+app.get('/api/products/:id/reviews', async (req, res, next) => {
+  try {
+    const productId = parsePositiveInteger(req.params.id, 'productId');
+
+    if (config.useMockData) {
+      res.json(listLocalReviews(productId));
+      return;
+    }
+
+    if (!isMongoConfigured()) {
+      res.json([]);
+      return;
+    }
+
+    const collection = await getReviewsCollection();
+    const reviews = await collection
+      .find({ productId, status: 'published' })
+      .sort({ createdAt: -1 })
+      .limit(80)
+      .toArray();
+    res.json(reviews.map(toReviewResponse));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/products/:id/reviews', requireAuth, async (req: AuthRequest, res, next) => {
+  try {
+    const productId = parsePositiveInteger(req.params.id, 'productId');
+    const payload = parseReviewPayload(req.body);
+
+    if (config.useMockData) {
+      res.status(201).json(
+        createLocalReview({
+          userId: req.authUser!.id,
+          userName: req.authUser!.name,
+          userEmail: req.authUser!.email,
+          productId,
+          ...payload
+        })
+      );
+      return;
+    }
+
+    if (!isMongoConfigured()) {
+      res.status(503).json({ error: 'MongoDB Atlas no esta configurado' });
+      return;
+    }
+
+    const productName = await getProductName(productId);
+    if (!productName) {
+      res.status(404).json({ error: 'Producto no encontrado' });
+      return;
+    }
+
+    const now = new Date();
+    const review: ProductReviewDocument = {
+      userId: req.authUser!.id,
+      userName: req.authUser!.name,
+      userEmail: req.authUser!.email,
+      productId,
+      productName,
+      rating: payload.rating,
+      title: payload.title,
+      comment: payload.comment,
+      verifiedPurchase: await hasVerifiedPurchase(req.authUser!.id, req.authUser!.email, productId),
+      helpfulUserIds: [],
+      helpfulCount: 0,
+      status: 'published',
+      createdAt: now,
+      updatedAt: now
+    };
+
+    const collection = await getReviewsCollection();
+    const result = await collection.insertOne(review);
+    res.status(201).json(toReviewResponse({ ...review, _id: result.insertedId }));
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Cotiza carrito sin crear pedido: valida productos, stock, subtotal, IGV y envio.
 app.post('/api/cart/quote', async (req, res, next) => {
   try {
@@ -360,6 +478,71 @@ app.get('/api/account/orders', requireAuth, async (req: AuthRequest, res, next) 
   }
 });
 
+app.get('/api/account/reviews', requireAuth, async (req: AuthRequest, res, next) => {
+  try {
+    if (config.useMockData) {
+      res.json(listLocalReviewsForUser(req.authUser!.id));
+      return;
+    }
+
+    if (!isMongoConfigured()) {
+      res.json([]);
+      return;
+    }
+
+    const collection = await getReviewsCollection();
+    const reviews = await collection
+      .find({ userId: req.authUser!.id })
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .toArray();
+    res.json(reviews.map(toReviewResponse));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/reviews/:id/helpful', requireAuth, async (req: AuthRequest, res, next) => {
+  try {
+    const reviewId = req.params.id;
+
+    if (config.useMockData) {
+      res.json(markHelpfulLocalReview(reviewId, req.authUser!.id));
+      return;
+    }
+
+    if (!isMongoConfigured()) {
+      res.status(503).json({ error: 'MongoDB Atlas no esta configurado' });
+      return;
+    }
+    if (!ObjectId.isValid(reviewId)) {
+      res.status(400).json({ error: 'id de resena invalido' });
+      return;
+    }
+
+    const collection = await getReviewsCollection();
+    await collection.updateOne(
+      { _id: new ObjectId(reviewId), status: 'published' },
+      {
+        $addToSet: { helpfulUserIds: req.authUser!.id },
+        $set: { updatedAt: new Date() }
+      }
+    );
+    const review = await collection.findOne({ _id: new ObjectId(reviewId) });
+    if (!review) {
+      res.status(404).json({ error: 'Resena no encontrada' });
+      return;
+    }
+    await collection.updateOne(
+      { _id: review._id },
+      { $set: { helpfulCount: review.helpfulUserIds.length } }
+    );
+    res.json(toReviewResponse({ ...review, helpfulCount: review.helpfulUserIds.length }));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/api/admin/users', requireAdmin, async (_req, res, next) => {
   if (config.useMockData) {
     res.json(listLocalUsers());
@@ -376,6 +559,60 @@ app.get('/api/admin/users', requireAdmin, async (_req, res, next) => {
       `
     );
     res.json(rows);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/admin/reviews', requireAdmin, async (_req, res, next) => {
+  try {
+    if (config.useMockData) {
+      res.json(listLocalAdminReviews());
+      return;
+    }
+
+    if (!isMongoConfigured()) {
+      res.json([]);
+      return;
+    }
+
+    const collection = await getReviewsCollection();
+    const reviews = await collection.find({}).sort({ createdAt: -1 }).limit(100).toArray();
+    res.json(reviews.map(toReviewResponse));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/api/admin/reviews/:id', requireAdmin, async (req, res, next) => {
+  try {
+    const reviewId = req.params.id;
+
+    if (config.useMockData) {
+      res.json(hideLocalReview(reviewId));
+      return;
+    }
+
+    if (!isMongoConfigured()) {
+      res.status(503).json({ error: 'MongoDB Atlas no esta configurado' });
+      return;
+    }
+    if (!ObjectId.isValid(reviewId)) {
+      res.status(400).json({ error: 'id de resena invalido' });
+      return;
+    }
+
+    const collection = await getReviewsCollection();
+    const result = await collection.findOneAndUpdate(
+      { _id: new ObjectId(reviewId) },
+      { $set: { status: 'hidden', updatedAt: new Date() } },
+      { returnDocument: 'after' }
+    );
+    if (!result) {
+      res.status(404).json({ error: 'Reseña no encontrada' });
+      return;
+    }
+    res.json(toReviewResponse(result));
   } catch (error) {
     next(error);
   }

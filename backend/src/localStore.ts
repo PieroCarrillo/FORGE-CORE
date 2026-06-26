@@ -75,6 +75,24 @@ type LocalBuyerMessage = {
   created_at: string;
 };
 
+type LocalReview = {
+  id: string;
+  userId: number;
+  userName: string;
+  userEmail: string;
+  productId: number;
+  productName: string;
+  rating: number;
+  title: string;
+  comment: string;
+  verifiedPurchase: boolean;
+  helpfulUserIds: number[];
+  helpfulCount: number;
+  status: 'published' | 'hidden';
+  createdAt: string;
+  updatedAt: string;
+};
+
 // Catalogos base equivalentes a las tablas categories y brands.
 const categories: LocalCategory[] = [
   { id: 1, name: 'GPU', slug: 'gpu' },
@@ -195,6 +213,7 @@ const products: LocalProduct[] = [
 
 const metrics: LocalMetric[] = [];
 const orders: LocalOrder[] = [];
+const reviews: LocalReview[] = [];
 
 const users: LocalUser[] = [
   {
@@ -251,6 +270,7 @@ let nextMetricId = 1;
 let nextOrderId = 1;
 let nextUserId = users.length + 1;
 let nextBuyerMessageId = buyerMessages.length + 1;
+let nextReviewId = 1;
 
 function toPublicLocalUser(user: LocalUser) {
   return {
@@ -439,6 +459,111 @@ export function createLocalSimulatedOrder(customerName: string, customerEmail: s
 
 export function listLocalOrdersForUser(userId: number) {
   return orders.filter((order) => order.user_id === userId || order.customer_email === users.find((user) => user.id === userId)?.email);
+}
+
+function userHasPurchasedProduct(userId: number, productId: number) {
+  const user = users.find((item) => item.id === userId);
+  if (!user) return false;
+  return orders.some((order) => (order.user_id === userId || order.customer_email === user.email) && order.status === 'paid_simulated');
+}
+
+function toApiReview(review: LocalReview) {
+  return {
+    id: review.id,
+    userId: review.userId,
+    userName: review.userName,
+    productId: review.productId,
+    productName: review.productName,
+    rating: review.rating,
+    title: review.title,
+    comment: review.comment,
+    verifiedPurchase: review.verifiedPurchase,
+    helpfulCount: review.helpfulCount,
+    status: review.status,
+    createdAt: review.createdAt,
+    updatedAt: review.updatedAt
+  };
+}
+
+export function listLocalReviews(productId?: number) {
+  return reviews
+    .filter((review) => review.status === 'published')
+    .filter((review) => !productId || review.productId === productId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .map(toApiReview);
+}
+
+export function listLocalAdminReviews() {
+  return reviews
+    .slice()
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .map(toApiReview);
+}
+
+export function listLocalReviewsForUser(userId: number) {
+  return reviews
+    .filter((review) => review.userId === userId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .map(toApiReview);
+}
+
+export function createLocalReview(payload: {
+  userId: number;
+  userName: string;
+  userEmail: string;
+  productId: number;
+  rating: number;
+  title: string;
+  comment: string;
+}) {
+  const product = products.find((item) => item.id === payload.productId);
+  if (!product) {
+    throw new Error('Producto no existe');
+  }
+
+  const now = new Date().toISOString();
+  const review: LocalReview = {
+    id: String(nextReviewId++),
+    userId: payload.userId,
+    userName: payload.userName,
+    userEmail: payload.userEmail,
+    productId: payload.productId,
+    productName: product.name,
+    rating: payload.rating,
+    title: payload.title,
+    comment: payload.comment,
+    verifiedPurchase: userHasPurchasedProduct(payload.userId, payload.productId),
+    helpfulUserIds: [],
+    helpfulCount: 0,
+    status: 'published',
+    createdAt: now,
+    updatedAt: now
+  };
+  reviews.unshift(review);
+  return toApiReview(review);
+}
+
+export function markHelpfulLocalReview(reviewId: string, userId: number) {
+  const review = reviews.find((item) => item.id === reviewId);
+  if (!review) {
+    throw new Error('Reseña no existe');
+  }
+  if (!review.helpfulUserIds.includes(userId)) {
+    review.helpfulUserIds.push(userId);
+    review.helpfulCount = review.helpfulUserIds.length;
+    review.updatedAt = new Date().toISOString();
+  }
+  return toApiReview(review);
+}
+
+export function hideLocalReview(reviewId: string) {
+  const review = reviews.find((item) => item.id === reviewId);
+  if (!review) {
+    throw new Error('Reseña no existe');
+  }
+  review.status = 'hidden';
+  review.updatedAt = new Date().toISOString();
+  return toApiReview(review);
 }
 
 // Resumen usado por /api/admin/dashboard en modo mock.

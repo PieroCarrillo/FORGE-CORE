@@ -1,6 +1,6 @@
 # FORGE CORE | PC Hardware Hub
 
-E-commerce ficticio de productos tecnologicos desarrollado para el curso de Sistemas Operativos. El sistema simula una tienda de componentes de PC con catalogo, carrito, checkout con pago simulado, gestion de usuarios por roles, panel administrativo, metricas del servidor y persistencia en MariaDB.
+E-commerce ficticio de productos tecnologicos desarrollado para el curso de Sistemas Operativos. El sistema simula una tienda de componentes de PC con catalogo, carrito, checkout con pago simulado, gestion de usuarios por roles, comunidad de resenas, panel administrativo, metricas del servidor y persistencia en MariaDB + MongoDB Atlas.
 
 ## Arquitectura
 
@@ -20,9 +20,13 @@ EC2 Database Server
   - MariaDB
   - Stored procedures
   - Tablas de usuarios, productos, pedidos, inventario y metricas
+
+MongoDB Atlas Free M0
+  - Coleccion product_reviews
+  - Resenas, votos de utilidad y moderacion de comunidad
 ```
 
-La base de datos no se expone directamente a internet. El backend se conecta a MariaDB usando la IP privada del servidor de base de datos dentro de la VPC de AWS.
+La base MariaDB no se expone directamente a internet. El backend se conecta a MariaDB usando la IP privada del servidor de base de datos dentro de la VPC de AWS. Para Comunidad, el backend usa MongoDB Atlas Free M0 con acceso permitido solo desde la IP publica del App Server.
 
 ## Funcionalidades
 
@@ -33,8 +37,9 @@ La base de datos no se expone directamente a internet. El backend se conecta a M
 - Detalle de producto.
 - Carrito y checkout con pago simulado.
 - Pedidos vinculados al usuario autenticado.
+- Comunidad con resenas por producto guardadas en MongoDB Atlas.
 - Perfil de cliente con ultimos pedidos.
-- Panel admin con usuarios, productos, stock bajo, pedidos y metricas.
+- Panel admin con usuarios, productos, stock bajo, pedidos, metricas y moderacion de resenas.
 - Stored procedure para crear pedidos con transaccion y bloqueo de stock.
 - Worker de Node.js que recolecta CPU, RAM, disco y procesos del servidor Linux.
 
@@ -73,6 +78,8 @@ scripts/   Utilidades locales de apoyo.
 | Backend | Node.js + Express | API REST para productos, auth, pedidos, perfil y admin. |
 | BD | MariaDB | Persistencia de usuarios, catalogo, pedidos, stock y metricas. |
 | Driver BD | mysql2 | Pool de conexiones entre backend y MariaDB. |
+| Comunidad | MongoDB Atlas Free M0 | Resenas, votos de utilidad y moderacion. |
+| Driver NoSQL | mongodb | Conexion del backend con la coleccion `product_reviews`. |
 | SO | worker_threads, os, /proc, df | Recoleccion concurrente de metricas del servidor. |
 | Cloud | AWS EC2 | Separacion entre servidor de app y servidor de base de datos. |
 | Web server | Nginx | Sirve React y hace proxy de `/api` hacia Express. |
@@ -95,6 +102,7 @@ mysql -u root -p forge_core < database/migrations/004_add_auth_roles_and_profile
 ### 2. Backend
 
 Copiar `backend/.env.example` como `backend/.env` y ajustar credenciales locales.
+Para probar Comunidad real, agregar `MONGODB_URI` y `MONGODB_DB`; si no se configuran, el catalogo y checkout siguen funcionando y las resenas quedan desactivadas.
 
 ```bash
 cd backend
@@ -130,6 +138,7 @@ Servidor de aplicacion:
 - Nginx sirve el build de React.
 - Express corre como servicio `forge-core-api`.
 - El backend usa `/opt/forge-core/backend/.env`.
+- El `.env` debe incluir `MONGODB_URI` para activar Comunidad con Atlas.
 
 Servidor de base de datos:
 
@@ -173,8 +182,14 @@ sudo mysql forge_core
 | GET | `/api/products/:slug` | Devuelve detalle de producto. |
 | POST | `/api/orders/simulated-payment` | Crea pedido simulado y descuenta stock. |
 | GET | `/api/account/orders` | Lista pedidos del usuario autenticado. |
+| GET | `/api/products/:id/reviews` | Lista resenas publicadas del producto. |
+| POST | `/api/products/:id/reviews` | Crea resena autenticada en MongoDB. |
+| GET | `/api/account/reviews` | Lista resenas del usuario autenticado. |
+| POST | `/api/reviews/:id/helpful` | Marca una resena como util. |
 | GET | `/api/admin/dashboard` | Resumen admin, solo rol admin. |
 | GET | `/api/admin/users` | Lista usuarios, solo rol admin. |
+| GET | `/api/admin/reviews` | Lista resenas para moderacion, solo rol admin. |
+| DELETE | `/api/admin/reviews/:id` | Oculta una resena, solo rol admin. |
 | GET | `/api/admin/system-metrics` | Lista metricas del servidor, solo rol admin. |
 | POST | `/api/admin/products` | Crea producto, solo rol admin. |
 

@@ -102,26 +102,25 @@ export function parseProductPayload(value: unknown) {
   };
 }
 
-// Valida los mensajes de Comunidad antes de guardarlos en buyer_messages.
-export function parseCommunityMessagePayload(value: unknown) {
+export function parseReviewPayload(value: unknown) {
   if (!value || typeof value !== 'object') {
-    throw new Error('payload de mensaje invalido');
+    throw new Error('payload de reseña invalido');
   }
 
   const source = value as Record<string, unknown>;
-  const author = String(source.author ?? '').trim();
-  const product = String(source.product ?? '').trim();
-  const message = String(source.message ?? '').trim();
+  const rating = Number(source.rating);
+  const title = String(source.title ?? '').trim();
+  const comment = String(source.comment ?? '').trim();
 
-  if (author.length < 2 || author.length > 120) {
-    throw new Error('author debe tener entre 2 y 120 caracteres');
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    throw new Error('rating debe estar entre 1 y 5');
   }
-  if (product.length < 2 || product.length > 160) {
-    throw new Error('product debe tener entre 2 y 160 caracteres');
+  if (title.length < 3 || title.length > 90) {
+    throw new Error('title debe tener entre 3 y 90 caracteres');
   }
-  if (message.length < 3 || message.length > 1000) {
-    throw new Error('message debe tener entre 3 y 1000 caracteres');
+  if (comment.length < 8 || comment.length > 1200) {
+    throw new Error('comment debe tener entre 8 y 1200 caracteres');
   }
 
-  return { author, product, message };
+  return { rating, title, comment };
 }
