@@ -502,6 +502,30 @@ app.get('/api/account/reviews', requireAuth, async (req: AuthRequest, res, next)
   }
 });
 
+app.get('/api/reviews', async (_req, res, next) => {
+  try {
+    if (config.useMockData) {
+      res.json(listLocalAdminReviews().filter((review) => review.status === 'published').slice(0, 100));
+      return;
+    }
+
+    if (!isMongoConfigured()) {
+      res.json([]);
+      return;
+    }
+
+    const collection = await getReviewsCollection();
+    const reviews = await collection
+      .find({ status: 'published' })
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .toArray();
+    res.json(reviews.map(toReviewResponse));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post('/api/reviews/:id/helpful', requireAuth, async (req: AuthRequest, res, next) => {
   try {
     const reviewId = req.params.id;

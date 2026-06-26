@@ -140,6 +140,13 @@ type ReviewForm = {
   comment: string;
 };
 
+const views: View[] = ['inicio', 'catalogo', 'detalle', 'carrito', 'comunidad', 'perfil', 'admin'];
+
+function readViewFromHash(): View {
+  const hash = window.location.hash.replace('#', '');
+  return views.includes(hash as View) ? (hash as View) : 'inicio';
+}
+
 const videoUrl =
   'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260508_215831_c6a8989c-d716-4d8d-8745-e972a2eec711.mp4';
 
@@ -267,7 +274,7 @@ function Logo() {
 }
 
 function App() {
-  const [view, setView] = useState<View>('inicio');
+  const [view, setView] = useState<View>(() => readViewFromHash());
   const [productList, setProductList] = useState<Product[]>(seedProducts);
   const [selected, setSelected] = useState<Product>(seedProducts[0]);
   const [category, setCategory] = useState<'Todos' | Category>('Todos');
@@ -328,6 +335,19 @@ function App() {
   const shipping = subtotal > 0 ? 25 : 0;
   const total = subtotal + tax + shipping;
 
+  useEffect(() => {
+    const syncViewFromHash = () => setView(readViewFromHash());
+    window.addEventListener('hashchange', syncViewFromHash);
+    return () => window.removeEventListener('hashchange', syncViewFromHash);
+  }, []);
+
+  useEffect(() => {
+    const nextHash = `#${view}`;
+    if (window.location.hash !== nextHash) {
+      window.history.replaceState(null, '', nextHash);
+    }
+  }, [view]);
+
   function authHeaders(extra?: HeadersInit): HeadersInit {
     return {
       ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
@@ -347,7 +367,7 @@ function App() {
     setAuthUser(user);
     window.localStorage.setItem('forge_core_token', token);
     window.localStorage.setItem('forge_core_user', JSON.stringify(user));
-    setView('inicio');
+    setView(readViewFromHash());
   }
 
   function clearSession() {
@@ -518,11 +538,11 @@ function App() {
 
   async function loadCommunityReviews() {
     try {
-      const responses = await Promise.all(productList.slice(0, 12).map((product) => fetch(`/api/products/${product.id}/reviews`)));
-      const groups = await Promise.all(responses.filter((response) => response.ok).map((response) => response.json() as Promise<ProductReview[]>));
-      setCommunityReviews(groups.flat().sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+      const response = await fetch('/api/reviews');
+      if (!response.ok) return;
+      setCommunityReviews((await response.json()) as ProductReview[]);
     } catch {
-      setCommunityReviews([]);
+      // Conserva el feed actual si una recarga puntual falla.
     }
   }
 
@@ -724,10 +744,20 @@ function App() {
         throw new Error(data.error ?? 'No se pudo guardar la reseña');
       }
 
+      const createdReview = data as ProductReview;
       setReviewStatus('saved');
       setReviewMessage('Reseña guardada en MongoDB Atlas.');
       setReviewForm((form) => ({ ...form, title: '', comment: '', rating: '5' }));
-      await Promise.all([loadProductReviews(selected.id), loadCommunityReviews(), loadAccountReviews()]);
+      setCommunityReviews((reviews) => [createdReview, ...reviews.filter((review) => review.id !== createdReview.id)]);
+      setAccountReviews((reviews) => [createdReview, ...reviews.filter((review) => review.id !== createdReview.id)]);
+      if (createdReview.productId === selected.id) {
+        setProductReviews((reviews) => [createdReview, ...reviews.filter((review) => review.id !== createdReview.id)]);
+      }
+      const refreshes = [loadCommunityReviews(), loadAccountReviews()];
+      if (createdReview.productId === selected.id) {
+        refreshes.push(loadProductReviews(createdReview.productId));
+      }
+      await Promise.all(refreshes);
     } catch (error) {
       setReviewStatus('failed');
       setReviewMessage(error instanceof Error ? error.message : 'No se pudo guardar la reseña');
