@@ -10,8 +10,8 @@ Usuario
   v
 EC2 App Server
   - Nginx
-  - Frontend React build
-  - Backend Node.js + Express
+  - Docker container: frontend React + Nginx
+  - Docker container: backend Node.js + Express
   - Worker de metricas del sistema operativo
   |
   | Conexion privada por puerto 3306
@@ -82,6 +82,7 @@ scripts/   Utilidades locales de apoyo.
 | Driver NoSQL | mongodb | Conexion del backend con la coleccion `product_reviews`. |
 | SO | worker_threads, os, /proc, df | Recoleccion concurrente de metricas del servidor. |
 | Cloud | AWS EC2 | Separacion entre servidor de app y servidor de base de datos. |
+| Contenedores | Docker + Docker Compose | Empaqueta frontend y backend dentro del App Server. |
 | Web server | Nginx | Sirve React y hace proxy de `/api` hacia Express. |
 | Servicio | systemd | Mantiene el backend activo como servicio Linux. |
 
@@ -135,8 +136,8 @@ http://localhost:5173
 Servidor de aplicacion:
 
 - Ubuntu Server.
-- Nginx sirve el build de React.
-- Express corre como servicio `forge-core-api`.
+- Docker ejecuta `forge-core-web` y `forge-core-api`.
+- Nginx del host recibe trafico publico y lo redirige a los contenedores.
 - El backend usa `/opt/forge-core/backend/.env`.
 - El `.env` debe incluir `MONGODB_URI` para activar Comunidad con Atlas.
 
@@ -151,7 +152,9 @@ Comandos utiles en App Server:
 
 ```bash
 cd /opt/forge-core
-sudo systemctl status forge-core-api --no-pager
+sudo docker compose -f docker-compose.aws.yml ps
+sudo docker compose -f docker-compose.aws.yml logs -f api
+sudo docker compose -f docker-compose.aws.yml logs -f web
 sudo systemctl status nginx --no-pager
 curl http://127.0.0.1/api/health
 ```
@@ -169,6 +172,9 @@ sudo mysql forge_core
 - `database/procedures.sql`: define stored procedures de pedidos, stock, dashboard y metricas.
 - `database/seed.sql`: inserta usuarios, categorias, marcas y productos iniciales.
 - `database/migrations/004_add_auth_roles_and_profile.sql`: agrega login, roles, tokens de sesion y vincula pedidos con usuarios.
+- `docker-compose.aws.yml`: levanta los contenedores `forge-core-web` y `forge-core-api`.
+- `backend/Dockerfile`: construye el contenedor del backend Node.js.
+- `frontend/Dockerfile`: construye el frontend y lo sirve con Nginx dentro del contenedor.
 
 ## Endpoints principales
 
