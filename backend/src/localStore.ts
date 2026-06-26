@@ -60,7 +60,7 @@ type LocalUser = {
   name: string;
   username: string;
   email: string;
-  role: 'admin' | 'customer';
+  role: 'admin' | 'customer' | 'seller';
   password: string;
   session_token: string | null;
   created_at: string;
@@ -234,6 +234,17 @@ const users: LocalUser[] = [
     email: 'cliente@forgecore.local',
     role: 'customer',
     password: 'ClienteForge2026!',
+    session_token: null,
+    created_at: new Date().toISOString(),
+    last_login_at: null
+  },
+  {
+    id: 3,
+    name: 'Vendedor Demo',
+    username: 'vendedor',
+    email: 'vendedor@forgecore.local',
+    role: 'seller',
+    password: 'VendedorForge2026!',
     session_token: null,
     created_at: new Date().toISOString(),
     last_login_at: null

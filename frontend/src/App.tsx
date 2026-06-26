@@ -34,7 +34,7 @@ import type { FormEvent, ReactNode } from 'react';
 
 type View = 'inicio' | 'catalogo' | 'detalle' | 'carrito' | 'comunidad' | 'perfil' | 'admin';
 type Category = 'GPU' | 'RAM' | 'CPU' | 'SSD' | 'Fuente';
-type UserRole = 'admin' | 'customer';
+type UserRole = 'admin' | 'customer' | 'seller';
 
 type Product = {
   id: number;
@@ -49,6 +49,7 @@ type Product = {
   imageUrl: string;
   specs: string[];
   description: string;
+  active?: boolean;
 };
 
 type CartItem = Product & {
@@ -71,8 +72,12 @@ type OrderSummary = {
   subtotal?: number | string;
   tax?: number | string;
   shipping?: number | string;
+  discount?: number | string;
+  promotion_code?: string;
   total: number | string;
   status: string;
+  fulfillment_status?: 'new' | 'preparing' | 'shipped' | 'delivered';
+  status_updated_at?: string;
   created_at?: string;
 };
 
@@ -111,6 +116,20 @@ type AdminDashboard = {
   };
   lowStock: Array<{ id: number; name: string; stock: number; category?: string }>;
   latestOrders: OrderSummary[];
+};
+
+type Promotion = {
+  code: string;
+  description: string;
+  discount_type: 'percent' | 'fixed';
+  discount_value: number | string;
+};
+
+type AdminReports = {
+  revenueByCategory: Array<{ category: string; revenue: number | string; units: number | string }>;
+  topProducts: Array<{ product_name: string; units: number | string; revenue: number | string }>;
+  ordersByStatus: Array<{ fulfillment_status: string; total: number | string }>;
+  promotionUsage: Array<{ promotion_code: string; orders: number | string; discount_total: number | string }>;
 };
 
 type AdminProductForm = {
@@ -304,7 +323,7 @@ function App() {
     const raw = window.localStorage.getItem('forge_core_user');
     return raw ? (JSON.parse(raw) as AuthUser) : null;
   });
-  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [authMode, setAuthMode] = useState<'login' | 'register' | 'reset'>('login');
   const [authStatus, setAuthStatus] = useState<'idle' | 'loading' | 'error'>('idle');
   const [authMessage, setAuthMessage] = useState('');
   const [authForm, setAuthForm] = useState<AuthForm>({
@@ -314,6 +333,13 @@ function App() {
     email: '',
     password: 'MasterForge2026!'
   });
+  const [resetToken, setResetToken] = useState('');
+  const [resetPassword, setResetPassword] = useState('');
+  const [cartLoaded, setCartLoaded] = useState(false);
+  const [promotionCode, setPromotionCode] = useState('');
+  const [availablePromotions, setAvailablePromotions] = useState<Promotion[]>([]);
+  const [editingProductId, setEditingProductId] = useState<number | null>(null);
+  const [adminReports, setAdminReports] = useState<AdminReports | null>(null);
   const [adminProductForm, setAdminProductForm] = useState<AdminProductForm>(() => createDemoProductForm());
   const [adminSaveStatus, setAdminSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle');
   const [adminSaveMessage, setAdminSaveMessage] = useState('');
@@ -321,6 +347,8 @@ function App() {
   const featuredProducts = useMemo(() => productList.slice(0, Math.min(5, productList.length)), [productList]);
   const featuredProduct = featuredProducts[carouselIndex % Math.max(featuredProducts.length, 1)] ?? seedProducts[0];
   const isAdmin = authUser?.role === 'admin';
+  const isSeller = authUser?.role === 'seller';
+  const canManageProducts = isAdmin || isSeller;
 
   const filtered = useMemo(() => {
     return productList.filter((product) => {
@@ -333,7 +361,14 @@ function App() {
   const subtotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const tax = subtotal * 0.18;
   const shipping = subtotal > 0 ? 25 : 0;
-  const total = subtotal + tax + shipping;
+  const normalizedPromotionCode = promotionCode.trim().toUpperCase();
+  const activePromotion = availablePromotions.find((promotion) => promotion.code.toUpperCase() === normalizedPromotionCode) ?? null;
+  const discount = activePromotion
+    ? activePromotion.discount_type === 'percent'
+      ? subtotal * (Number(activePromotion.discount_value) / 100)
+      : Math.min(subtotal, Number(activePromotion.discount_value))
+    : 0;
+  const total = Math.max(0, subtotal + tax + shipping - discount);
 
   useEffect(() => {
     const syncViewFromHash = () => setView(readViewFromHash());
@@ -381,6 +416,10 @@ function App() {
     setAdminReviews([]);
     setCommunityReviews([]);
     setProductReviews([]);
+    setCart([]);
+    setCartLoaded(false);
+    setPromotionCode('');
+    setAdminReports(null);
     setView('inicio');
     window.localStorage.removeItem('forge_core_token');
     window.localStorage.removeItem('forge_core_user');
@@ -439,10 +478,21 @@ function App() {
 
   useEffect(() => {
     if (!authUser) return;
+    setCartLoaded(false);
+    void loadPersistentCart();
+    void loadPromotions();
     void loadAccountOrders();
     void loadAccountReviews();
     void loadCommunityReviews();
   }, [authToken, authUser?.id]);
+
+  useEffect(() => {
+    if (!authUser || !cartLoaded) return;
+    const timer = window.setTimeout(() => {
+      void savePersistentCart();
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [authToken, authUser?.id, cart, cartLoaded]);
 
   useEffect(() => {
     if (!authUser || !selected?.id) return;
@@ -461,10 +511,11 @@ function App() {
 
     async function loadAdminData() {
       try {
-        const [metricsResponse, dashboardResponse, usersResponse] = await Promise.all([
+        const [metricsResponse, dashboardResponse, usersResponse, reportsResponse] = await Promise.all([
           apiFetch('/api/admin/system-metrics'),
           apiFetch('/api/admin/dashboard'),
-          apiFetch('/api/admin/users')
+          apiFetch('/api/admin/users'),
+          apiFetch('/api/admin/reports')
         ]);
 
         if (metricsResponse.ok) {
@@ -478,6 +529,9 @@ function App() {
         if (usersResponse.ok) {
           const users = (await usersResponse.json()) as AuthUser[];
           if (!cancelled) setAdminUsers(users);
+        }
+        if (reportsResponse.ok && !cancelled) {
+          setAdminReports((await reportsResponse.json()) as AdminReports);
         }
         const reviewsResponse = await apiFetch('/api/admin/reviews');
         if (reviewsResponse.ok && !cancelled) {
@@ -511,10 +565,48 @@ function App() {
   }, [featuredProducts.length]);
 
   useEffect(() => {
-    if (view === 'admin' && !isAdmin) {
+    if (view === 'admin' && !canManageProducts) {
       setView('catalogo');
     }
-  }, [isAdmin, view]);
+  }, [canManageProducts, view]);
+
+  async function loadPersistentCart() {
+    try {
+      const response = await apiFetch('/api/cart');
+      if (!response.ok) {
+        setCartLoaded(true);
+        return;
+      }
+      const data = (await response.json()) as { items: Array<Omit<Product, 'accent'> & { accent?: string; quantity: number }> };
+      setCart(data.items.map((item, index) => ({ ...normalizeProduct(item, index), quantity: item.quantity })));
+    } catch {
+      // Si la red falla, no borra el carrito visual actual.
+    } finally {
+      setCartLoaded(true);
+    }
+  }
+
+  async function savePersistentCart() {
+    try {
+      await apiFetch('/api/cart', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: cart.map((item) => ({ productId: item.id, quantity: item.quantity })) })
+      });
+    } catch {
+      // La sincronizacion se reintenta en el siguiente cambio del carrito.
+    }
+  }
+
+  async function loadPromotions() {
+    try {
+      const response = await fetch('/api/promotions');
+      if (!response.ok) return;
+      setAvailablePromotions((await response.json()) as Promotion[]);
+    } catch {
+      setAvailablePromotions([]);
+    }
+  }
 
   async function loadAccountOrders() {
     try {
@@ -562,6 +654,34 @@ function App() {
     setAuthMessage('');
 
     try {
+      if (authMode === 'reset') {
+        const path = resetToken ? '/api/auth/password-reset/confirm' : '/api/auth/password-reset/request';
+        const payload = resetToken
+          ? { token: resetToken, password: resetPassword }
+          : { identifier: authForm.identifier };
+        const response = await fetch(path, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error ?? 'No se pudo completar la recuperacion');
+        }
+        if (!resetToken) {
+          setResetToken(data.resetToken ?? '');
+          setAuthMessage(data.resetToken ? `Token demo generado: ${data.resetToken}` : data.message);
+        } else {
+          setAuthMode('login');
+          setAuthForm((form) => ({ ...form, password: resetPassword }));
+          setResetToken('');
+          setResetPassword('');
+          setAuthMessage('Clave actualizada. Ya puedes iniciar sesion.');
+        }
+        setAuthStatus('idle');
+        return;
+      }
+
       const path = authMode === 'login' ? '/api/auth/login' : '/api/auth/register';
       const payload =
         authMode === 'login'
@@ -680,14 +800,40 @@ function App() {
     setAdminSaveStatus('idle');
   }
 
+  function startEditingProduct(product: Product) {
+    const categoryId = categoryOptions.find((option) => option.label === product.category)?.id ?? '1';
+    const brandId = brandOptions.find((option) => option.label === product.brand)?.id ?? '1';
+    setEditingProductId(product.id);
+    setAdminProductForm({
+      name: product.name,
+      slug: product.slug,
+      categoryId,
+      brandId,
+      price: String(product.price),
+      stock: String(product.stock),
+      imageUrl: product.imageUrl,
+      specs: product.specs.join(', '),
+      description: product.description
+    });
+    setView('admin');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function resetProductForm() {
+    setEditingProductId(null);
+    setAdminProductForm(createDemoProductForm());
+    setAdminSaveStatus('idle');
+    setAdminSaveMessage('');
+  }
+
   async function createAdminProduct(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setAdminSaveStatus('saving');
     setAdminSaveMessage('');
 
     try {
-      const response = await apiFetch('/api/admin/products', {
-        method: 'POST',
+      const response = await apiFetch(editingProductId ? `/api/admin/products/${editingProductId}` : '/api/admin/products', {
+        method: editingProductId ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: adminProductForm.name,
@@ -708,11 +854,43 @@ function App() {
 
       await refreshStoreData();
       setAdminSaveStatus('saved');
-      setAdminSaveMessage('Producto guardado en MariaDB. El catalogo y el dashboard fueron actualizados.');
+      setAdminSaveMessage(editingProductId ? 'Producto actualizado en MariaDB.' : 'Producto guardado en MariaDB. El catalogo y el dashboard fueron actualizados.');
+      setEditingProductId(null);
       setAdminProductForm(createDemoProductForm());
     } catch (error) {
       setAdminSaveStatus('failed');
       setAdminSaveMessage(error instanceof Error ? error.message : 'No se pudo crear el producto');
+    }
+  }
+
+  async function deactivateProduct(productId: number) {
+    try {
+      const response = await apiFetch(`/api/admin/products/${productId}`, { method: 'DELETE' });
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error ?? 'No se pudo desactivar el producto');
+      }
+      setProductList((products) => products.filter((product) => product.id !== productId));
+      await refreshStoreData();
+    } catch (error) {
+      setAdminSaveStatus('failed');
+      setAdminSaveMessage(error instanceof Error ? error.message : 'No se pudo desactivar el producto');
+    }
+  }
+
+  async function updateOrderStatus(orderId: number, fulfillmentStatus: OrderSummary['fulfillment_status']) {
+    if (!fulfillmentStatus) return;
+    try {
+      const response = await apiFetch(`/api/admin/orders/${orderId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fulfillmentStatus })
+      });
+      if (!response.ok) return;
+      const dashboardResponse = await apiFetch('/api/admin/dashboard');
+      if (dashboardResponse.ok) setDashboard((await dashboardResponse.json()) as AdminDashboard);
+    } catch {
+      // El cambio de estado se puede reintentar desde el panel.
     }
   }
 
@@ -796,6 +974,7 @@ function App() {
         body: JSON.stringify({
           customerName: authUser?.name,
           customerEmail: authUser?.email,
+          promotionCode: activePromotion?.code ?? '',
           items: cart.map((item) => ({ productId: item.id, quantity: item.quantity }))
         })
       });
@@ -806,6 +985,7 @@ function App() {
       setPaymentStatus('approved');
       setPaymentMessage(`Pago aprobado con referencia ${data.paymentReference}.`);
       setCart([]);
+      setPromotionCode('');
       await refreshStoreData();
       await loadAccountOrders();
     } catch (error) {
@@ -820,7 +1000,7 @@ function App() {
     { label: 'Comunidad', view: 'comunidad' },
     { label: 'Carrito', view: 'carrito' },
     { label: 'Perfil', view: 'perfil' },
-    ...(isAdmin ? [{ label: 'Admin', view: 'admin' as View }] : [])
+    ...(canManageProducts ? [{ label: isSeller ? 'Vendedor' : 'Admin', view: 'admin' as View }] : [])
   ];
 
   if (!authUser) {
@@ -841,7 +1021,7 @@ function App() {
                   El usuario master entra como admin. Los clientes solo ven catalogo, carrito, perfil y sus ultimos pedidos.
                 </p>
               </div>
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <DemoAccessCard
                   title="Admin master"
                   subtitle="Inventario, usuarios, pedidos y metricas."
@@ -856,20 +1036,28 @@ function App() {
                   password="ClienteForge2026!"
                   onClick={() => quickLogin('cliente', 'ClienteForge2026!')}
                 />
+                <DemoAccessCard
+                  title="Vendedor demo"
+                  subtitle="Gestiona catalogo sin metricas sensibles."
+                  user="vendedor"
+                  password="VendedorForge2026!"
+                  onClick={() => quickLogin('vendedor', 'VendedorForge2026!')}
+                />
               </div>
             </div>
 
             <form onSubmit={handleAuth} className="rounded-lg border border-white/10 bg-[#11151d]/[0.94] p-6 shadow-glow backdrop-blur">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <p className="text-xs uppercase tracking-[0.22em] text-cyan-200">{authMode === 'login' ? 'Acceso seguro' : 'Nuevo cliente'}</p>
-                  <h2 className="mt-2 text-3xl font-semibold">{authMode === 'login' ? 'Iniciar sesion' : 'Crear cuenta'}</h2>
+                  <p className="text-xs uppercase tracking-[0.22em] text-cyan-200">{authMode === 'login' ? 'Acceso seguro' : authMode === 'register' ? 'Nuevo cliente' : 'Recuperacion demo'}</p>
+                  <h2 className="mt-2 text-3xl font-semibold">{authMode === 'login' ? 'Iniciar sesion' : authMode === 'register' ? 'Crear cuenta' : 'Restablecer clave'}</h2>
                 </div>
                 <button
                   type="button"
                   onClick={() => {
                     setAuthMode(authMode === 'login' ? 'register' : 'login');
                     setAuthMessage('');
+                    setResetToken('');
                   }}
                   className="rounded-full border border-white/10 px-4 py-2 text-sm text-white/75 transition hover:bg-white/10"
                 >
@@ -878,7 +1066,7 @@ function App() {
               </div>
 
               <div className="mt-6 grid gap-4">
-                {authMode === 'login' ? (
+                {authMode !== 'register' ? (
                   <AdminField label="Usuario o correo">
                     <div className="relative">
                       <UserCircle className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/35" />
@@ -906,24 +1094,49 @@ function App() {
                   </>
                 )}
 
-                <AdminField label="Password">
-                  <div className="relative">
-                    <LockKeyhole className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/35" />
-                    <input
-                      type="password"
-                      value={authForm.password}
-                      onChange={(event) => setAuthForm((form) => ({ ...form, password: event.target.value }))}
-                      className="field-control pl-10"
-                      placeholder="********"
-                    />
-                  </div>
-                </AdminField>
+                {(authMode !== 'reset' || resetToken) && (
+                  <AdminField label={authMode === 'reset' ? 'Nuevo password' : 'Password'}>
+                    <div className="relative">
+                      <LockKeyhole className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/35" />
+                      <input
+                        type="password"
+                        value={authMode === 'reset' ? resetPassword : authForm.password}
+                        onChange={(event) =>
+                          authMode === 'reset'
+                            ? setResetPassword(event.target.value)
+                            : setAuthForm((form) => ({ ...form, password: event.target.value }))
+                        }
+                        className="field-control pl-10"
+                        placeholder="********"
+                      />
+                    </div>
+                  </AdminField>
+                )}
+                {authMode === 'reset' && resetToken && (
+                  <AdminField label="Token demo">
+                    <input value={resetToken} onChange={(event) => setResetToken(event.target.value)} className="field-control" />
+                  </AdminField>
+                )}
               </div>
 
               <button disabled={authStatus === 'loading'} className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-full bg-cyan-300 px-5 py-3 font-semibold text-black transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-60">
-                {authMode === 'login' ? <ShieldCheck className="h-5 w-5" /> : <UserPlus className="h-5 w-5" />}
-                {authStatus === 'loading' ? 'Validando...' : authMode === 'login' ? 'Entrar a FORGE CORE' : 'Crear cliente'}
+                {authMode === 'login' ? <ShieldCheck className="h-5 w-5" /> : authMode === 'register' ? <UserPlus className="h-5 w-5" /> : <LockKeyhole className="h-5 w-5" />}
+                {authStatus === 'loading' ? 'Validando...' : authMode === 'login' ? 'Entrar a FORGE CORE' : authMode === 'register' ? 'Crear cliente' : resetToken ? 'Actualizar clave' : 'Generar token demo'}
               </button>
+              {authMode === 'login' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('reset');
+                    setAuthMessage('');
+                    setResetToken('');
+                    setResetPassword('');
+                  }}
+                  className="mt-3 w-full rounded-full border border-white/10 px-4 py-2 text-sm text-white/65 transition hover:bg-white/10 hover:text-white"
+                >
+                  Olvide mi clave
+                </button>
+              )}
 
               {authMessage && (
                 <p className="mt-4 rounded-lg border border-red-300/40 bg-red-300/10 p-3 text-sm text-red-100">{authMessage}</p>
@@ -963,7 +1176,7 @@ function App() {
 
           <div className="flex items-center gap-2 rounded-xl border border-white/15 bg-black/55 px-3 py-2 text-sm text-white/70 backdrop-blur">
             <span className="hidden sm:inline">{authUser.username}</span>
-            <span className={`rounded-full px-2 py-1 text-xs ${isAdmin ? 'bg-amber-300 text-black' : 'bg-cyan-300 text-black'}`}>
+            <span className={`rounded-full px-2 py-1 text-xs ${isAdmin ? 'bg-amber-300 text-black' : isSeller ? 'bg-lime-300 text-black' : 'bg-cyan-300 text-black'}`}>
               {authUser.role}
             </span>
             <button onClick={logout} className="rounded-full p-1.5 text-white/60 transition hover:bg-white/10 hover:text-white" aria-label="Cerrar sesion">
@@ -1166,6 +1379,21 @@ function App() {
                   <SummaryLine label="Subtotal" value={subtotal} />
                   <SummaryLine label="IGV 18%" value={tax} />
                   <SummaryLine label="Envio" value={shipping} />
+                  <label className="mt-4 block">
+                    <span className="text-xs uppercase tracking-[0.16em] text-white/45">Cupon demo</span>
+                    <input
+                      value={promotionCode}
+                      onChange={(event) => setPromotionCode(event.target.value.toUpperCase())}
+                      className="field-control mt-2"
+                      placeholder="FORGE10"
+                    />
+                  </label>
+                  {normalizedPromotionCode && (
+                    <p className={`mt-2 text-xs ${activePromotion ? 'text-lime-200' : 'text-amber-200'}`}>
+                      {activePromotion ? `${activePromotion.description} Descuento aplicado.` : 'Codigo no encontrado; no se aplicara descuento.'}
+                    </p>
+                  )}
+                  {discount > 0 && <SummaryLine label="Descuento" value={-discount} />}
                   <div className="my-4 h-px bg-white/10" />
                   <SummaryLine label="Total" value={total} strong />
                   <button onClick={simulatePayment} disabled={cart.length === 0 || paymentStatus === 'processing'} className="mt-5 flex w-full items-center justify-center gap-2 rounded-full bg-cyan-300 px-5 py-3 font-semibold text-black transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-50">
@@ -1289,7 +1517,7 @@ function App() {
                   </div>
                   <div className="mt-5 grid gap-3">
                     <ProfileLine icon={<Mail className="h-4 w-4" />} label="Correo" value={authUser.email} />
-                    <ProfileLine icon={<ShieldCheck className="h-4 w-4" />} label="Rol" value={authUser.role === 'admin' ? 'Administrador master' : 'Cliente'} />
+                    <ProfileLine icon={<ShieldCheck className="h-4 w-4" />} label="Rol" value={authUser.role === 'admin' ? 'Administrador master' : authUser.role === 'seller' ? 'Vendedor' : 'Cliente'} />
                     <ProfileLine icon={<ShoppingCart className="h-4 w-4" />} label="Items en carrito" value={String(cart.length)} />
                     <ProfileLine icon={<PackageCheck className="h-4 w-4" />} label="Pedidos" value={String(accountOrders.length)} />
                   </div>
@@ -1329,17 +1557,25 @@ function App() {
             </section>
           )}
 
-          {view === 'admin' && isAdmin && (
+          {view === 'admin' && canManageProducts && (
             <section className="px-5 py-10 sm:px-10 lg:px-16">
-              <SectionHeader eyebrow="Panel Admin Master" title="Usuarios, inventario, pedidos y metricas del sistema" />
-              <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                <Metric label="Ventas simuladas" value={`$${formatMoney(dashboard?.summary.simulated_revenue ?? dashboard?.summary.total_revenue ?? 0)}`} icon={<BarChart3 className="h-5 w-5" />} />
-                <Metric label="Pedidos BD" value={String(dashboard?.summary.order_count ?? dashboard?.summary.total_orders ?? 0)} icon={<ShoppingCart className="h-5 w-5" />} />
-                <Metric label="Usuarios" value={String(adminUsers.length)} icon={<Users className="h-5 w-5" />} />
-                <Metric label="Resenas MongoDB" value={String(adminReviews.length)} icon={<MessageSquare className="h-5 w-5" />} />
-              </div>
+              <SectionHeader eyebrow={isSeller ? 'Panel Vendedor' : 'Panel Admin Master'} title={isSeller ? 'Gestion de catalogo e inventario' : 'Usuarios, inventario, pedidos, reportes y metricas del sistema'} />
+              {isAdmin ? (
+                <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                  <Metric label="Ventas simuladas" value={`$${formatMoney(dashboard?.summary.simulated_revenue ?? dashboard?.summary.total_revenue ?? 0)}`} icon={<BarChart3 className="h-5 w-5" />} />
+                  <Metric label="Pedidos BD" value={String(dashboard?.summary.order_count ?? dashboard?.summary.total_orders ?? 0)} icon={<ShoppingCart className="h-5 w-5" />} />
+                  <Metric label="Usuarios" value={String(adminUsers.length)} icon={<Users className="h-5 w-5" />} />
+                  <Metric label="Resenas MongoDB" value={String(adminReviews.length)} icon={<MessageSquare className="h-5 w-5" />} />
+                </div>
+              ) : (
+                <div className="mt-8 grid gap-4 md:grid-cols-3">
+                  <Metric label="Productos activos" value={String(productList.length)} icon={<Box className="h-5 w-5" />} />
+                  <Metric label="Stock bajo" value={String(productList.filter((product) => product.stock <= 5).length)} icon={<Gauge className="h-5 w-5" />} />
+                  <Metric label="Rol" value="Vendedor" icon={<PackageCheck className="h-5 w-5" />} />
+                </div>
+              )}
 
-              <div className="mt-5 grid gap-5 lg:grid-cols-[1fr_0.9fr]">
+              {isAdmin && <div className="mt-5 grid gap-5 lg:grid-cols-[1fr_0.9fr]">
                 <div className="rounded-lg border border-white/10 bg-[#11151d]/[0.92] p-5">
                   <h3 className="flex items-center gap-2 text-xl font-semibold">
                     <MonitorCog className="h-5 w-5 text-cyan-200" />
@@ -1367,21 +1603,21 @@ function App() {
                           <p className="font-medium">{user.name}</p>
                           <p className="text-sm text-white/[0.45]">{user.email}</p>
                         </div>
-                        <span className={`rounded-full px-3 py-1 text-xs uppercase tracking-[0.12em] ${user.role === 'admin' ? 'bg-amber-300 text-black' : 'bg-cyan-300 text-black'}`}>{user.role}</span>
+                        <span className={`rounded-full px-3 py-1 text-xs uppercase tracking-[0.12em] ${user.role === 'admin' ? 'bg-amber-300 text-black' : user.role === 'seller' ? 'bg-lime-300 text-black' : 'bg-cyan-300 text-black'}`}>{user.role}</span>
                       </div>
                     ))}
                   </div>
                 </div>
-              </div>
+              </div>}
 
               <div className="mt-5 grid gap-5 xl:grid-cols-[1.05fr_0.95fr]">
                 <form onSubmit={createAdminProduct} className="rounded-lg border border-white/10 bg-[#11151d]/[0.92] p-5">
                   <div className="flex items-center justify-between gap-4">
                     <h3 className="flex items-center gap-2 text-xl font-semibold">
                       <Plus className="h-5 w-5 text-cyan-200" />
-                      Crear producto en MariaDB
+                      {editingProductId ? 'Editar producto en MariaDB' : 'Crear producto en MariaDB'}
                     </h3>
-                    <span className="rounded-full border border-cyan-200/20 px-3 py-1 text-xs uppercase tracking-[0.16em] text-cyan-100">Solo admin</span>
+                    <span className="rounded-full border border-cyan-200/20 px-3 py-1 text-xs uppercase tracking-[0.16em] text-cyan-100">{isSeller ? 'Vendedor' : 'Admin'}</span>
                   </div>
                   <div className="mt-5 grid gap-3 md:grid-cols-2">
                     <AdminField label="Nombre">
@@ -1421,8 +1657,13 @@ function App() {
                   </div>
                   <button disabled={adminSaveStatus === 'saving'} className="mt-5 inline-flex items-center gap-2 rounded-full bg-cyan-300 px-5 py-3 font-semibold text-black transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-60">
                     <Database className="h-4 w-4" />
-                    {adminSaveStatus === 'saving' ? 'Guardando...' : 'Guardar producto'}
+                    {adminSaveStatus === 'saving' ? 'Guardando...' : editingProductId ? 'Actualizar producto' : 'Guardar producto'}
                   </button>
+                  {editingProductId && (
+                    <button type="button" onClick={resetProductForm} className="ml-2 mt-5 inline-flex items-center gap-2 rounded-full border border-white/10 px-5 py-3 font-semibold text-white/75 transition hover:bg-white/10">
+                      Cancelar edicion
+                    </button>
+                  )}
                   {adminSaveMessage && <p className={`mt-4 rounded-lg border p-3 text-sm ${adminSaveStatus === 'saved' ? 'border-lime-300/40 bg-lime-300/10 text-lime-100' : 'border-red-300/40 bg-red-300/10 text-red-100'}`}>{adminSaveMessage}</p>}
                 </form>
                 <div className="rounded-lg border border-white/10 bg-[#11151d]/[0.92] p-5">
@@ -1432,7 +1673,24 @@ function App() {
                   </h3>
                   <div className="mt-5 grid gap-4">
                     <div className="space-y-3">
-                      {(dashboard?.latestOrders ?? []).slice(0, 4).map((order) => <OrderRow key={order.id} order={order} />)}
+                      {(dashboard?.latestOrders ?? []).slice(0, 4).map((order) => (
+                        <div key={order.id} className="rounded-lg border border-white/10 bg-white/[0.04] p-3">
+                          <OrderRow order={order} plain />
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {(['new', 'preparing', 'shipped', 'delivered'] as const).map((status) => (
+                              <button
+                                key={status}
+                                onClick={() => updateOrderStatus(order.id, status)}
+                                className={`rounded-full border px-3 py-1 text-xs transition ${
+                                  order.fulfillment_status === status ? 'border-cyan-300 bg-cyan-300 text-black' : 'border-white/10 text-white/60 hover:bg-white/10'
+                                }`}
+                              >
+                                {orderStatusLabel(status)}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
                       {!dashboard?.latestOrders?.length && <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4 text-sm text-white/55">Sin pedidos todavia.</div>}
                     </div>
                     <div className="h-px bg-white/10" />
@@ -1452,6 +1710,54 @@ function App() {
               </div>
 
               <div className="mt-5 rounded-lg border border-white/10 bg-[#11151d]/[0.92] p-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="flex items-center gap-2 text-xl font-semibold">
+                      <Settings className="h-5 w-5 text-cyan-200" />
+                      Gestion de productos
+                    </h3>
+                    <p className="mt-1 text-sm text-white/50">Editar precio, stock, imagen y desactivar productos del catalogo publico.</p>
+                  </div>
+                  <button onClick={resetProductForm} className="rounded-full border border-white/10 px-4 py-2 text-sm text-white/70 hover:bg-white/10">Nuevo producto</button>
+                </div>
+                <div className="mt-5 overflow-hidden rounded-lg border border-white/10">
+                  {productList.slice(0, 12).map((product) => (
+                    <div key={product.id} className="grid gap-3 border-b border-white/10 bg-white/[0.04] p-3 last:border-b-0 md:grid-cols-[1fr_110px_90px_180px] md:items-center">
+                      <div>
+                        <p className="font-semibold">{product.name}</p>
+                        <p className="text-sm text-white/45">{product.category} | {product.brand}</p>
+                      </div>
+                      <p className="text-sm text-white/70">${product.price.toLocaleString('en-US')}</p>
+                      <span className={`w-fit rounded-full px-3 py-1 text-sm ${product.stock <= 5 ? 'bg-amber-300 text-black' : 'bg-white/10 text-white/70'}`}>Stock {product.stock}</span>
+                      <div className="flex flex-wrap gap-2 md:justify-end">
+                        <button onClick={() => startEditingProduct(product)} className="rounded-full border border-white/10 px-3 py-1.5 text-sm text-white/75 hover:bg-white/10">Editar</button>
+                        <button onClick={() => deactivateProduct(product.id)} className="rounded-full border border-red-300/30 px-3 py-1.5 text-sm text-red-100 hover:bg-red-500/10">Desactivar</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {isAdmin && <div className="mt-5 rounded-lg border border-white/10 bg-[#11151d]/[0.92] p-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="flex items-center gap-2 text-xl font-semibold">
+                      <BarChart3 className="h-5 w-5 text-cyan-200" />
+                      Reportes ejecutivos
+                    </h3>
+                    <p className="mt-1 text-sm text-white/50">Ventas por categoria, top productos, estados y uso de cupones.</p>
+                  </div>
+                  <span className="rounded-full border border-cyan-200/20 px-3 py-1 text-xs uppercase tracking-[0.16em] text-cyan-100">MariaDB</span>
+                </div>
+                <div className="mt-5 grid gap-4 lg:grid-cols-4">
+                  <ReportMiniList title="Categorias" rows={(adminReports?.revenueByCategory ?? []).map((row) => `${row.category}: $${formatMoney(row.revenue)}`)} />
+                  <ReportMiniList title="Top productos" rows={(adminReports?.topProducts ?? []).map((row) => `${row.product_name}: ${row.units} und.`)} />
+                  <ReportMiniList title="Estados" rows={(adminReports?.ordersByStatus ?? []).map((row) => `${orderStatusLabel(row.fulfillment_status)}: ${row.total}`)} />
+                  <ReportMiniList title="Cupones" rows={(adminReports?.promotionUsage ?? []).map((row) => `${row.promotion_code}: $${formatMoney(row.discount_total)}`)} />
+                </div>
+              </div>}
+
+              {isAdmin && <div className="mt-5 rounded-lg border border-white/10 bg-[#11151d]/[0.92] p-5">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <h3 className="flex items-center gap-2 text-xl font-semibold">
@@ -1480,7 +1786,7 @@ function App() {
                     </div>
                   )}
                 </div>
-              </div>
+              </div>}
             </section>
           )}
         </main>
@@ -1589,16 +1895,41 @@ function ProfileLine({ icon, label, value }: { icon: ReactNode; label: string; v
   );
 }
 
-function OrderRow({ order }: { order: OrderSummary }) {
+function OrderRow({ order, plain = false }: { order: OrderSummary; plain?: boolean }) {
   return (
-    <div className="flex items-center justify-between gap-4 rounded-lg border border-white/10 bg-white/[0.06] p-3">
+    <div className={`flex items-center justify-between gap-4 ${plain ? '' : 'rounded-lg border border-white/10 bg-white/[0.06] p-3'}`}>
       <div>
         <p className="font-medium">Pedido #{order.id}</p>
         <p className="text-sm text-white/[0.45]">{order.payment_reference ?? order.customer_name}</p>
+        {order.promotion_code && <p className="text-xs text-lime-200">Cupon {order.promotion_code}</p>}
       </div>
       <div className="text-right">
         <p className="font-semibold">${formatMoney(order.total)}</p>
-        <p className="text-xs uppercase tracking-[0.14em] text-cyan-100/55">{order.status}</p>
+        <p className="text-xs uppercase tracking-[0.14em] text-cyan-100/55">{orderStatusLabel(order.fulfillment_status ?? 'new')}</p>
+      </div>
+    </div>
+  );
+}
+
+function orderStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    new: 'Nuevo',
+    preparing: 'Preparando',
+    shipped: 'Enviado',
+    delivered: 'Entregado'
+  };
+  return labels[status] ?? status;
+}
+
+function ReportMiniList({ title, rows }: { title: string; rows: string[] }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.05] p-4">
+      <p className="text-sm font-semibold text-white">{title}</p>
+      <div className="mt-3 space-y-2">
+        {rows.slice(0, 4).map((row) => (
+          <p key={row} className="truncate text-sm text-white/60">{row}</p>
+        ))}
+        {!rows.length && <p className="text-sm text-white/40">Sin datos aun.</p>}
       </div>
     </div>
   );

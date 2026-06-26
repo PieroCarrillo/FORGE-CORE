@@ -5,7 +5,7 @@ import { config } from './config.js';
 import { pool } from './db.js';
 import { findLocalUserByToken } from './localStore.js';
 
-export type AuthRole = 'admin' | 'customer';
+export type AuthRole = 'admin' | 'customer' | 'seller';
 
 export type AuthUser = {
   id: number;
@@ -104,6 +104,24 @@ export async function requireAdmin(req: AuthRequest, res: Response, next: NextFu
     }
     if (user.role !== 'admin') {
       res.status(403).json({ error: 'Solo el usuario administrador puede entrar a este recurso' });
+      return;
+    }
+    req.authUser = user;
+    next();
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function requireProductManager(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const user = await getUserFromRequest(req);
+    if (!user) {
+      res.status(401).json({ error: 'Sesion requerida' });
+      return;
+    }
+    if (user.role !== 'admin' && user.role !== 'seller') {
+      res.status(403).json({ error: 'Solo admin o vendedor pueden gestionar productos' });
       return;
     }
     req.authUser = user;

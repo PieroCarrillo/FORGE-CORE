@@ -9,6 +9,7 @@ USE forge_core;
 SET FOREIGN_KEY_CHECKS = 0;
 DROP TABLE IF EXISTS system_metrics;
 DROP TABLE IF EXISTS buyer_messages;
+DROP TABLE IF EXISTS promotions;
 DROP TABLE IF EXISTS inventory_movements;
 DROP TABLE IF EXISTS order_items;
 DROP TABLE IF EXISTS orders;
@@ -26,14 +27,17 @@ CREATE TABLE users (
   name VARCHAR(120) NOT NULL,
   username VARCHAR(80) NOT NULL UNIQUE,
   email VARCHAR(160) NOT NULL UNIQUE,
-  role ENUM('customer', 'admin') NOT NULL DEFAULT 'customer',
+  role ENUM('customer', 'admin', 'seller') NOT NULL DEFAULT 'customer',
   password_hash CHAR(64) NOT NULL,
   password_salt VARCHAR(64) NOT NULL,
   session_token CHAR(64) NULL,
+  password_reset_token CHAR(64) NULL,
+  password_reset_expires_at TIMESTAMP NULL,
   last_login_at TIMESTAMP NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_users_role (role),
-  INDEX idx_users_session_token (session_token)
+  INDEX idx_users_session_token (session_token),
+  INDEX idx_users_password_reset_token (password_reset_token)
 ) ENGINE=InnoDB;
 
 -- Categorias del catalogo: GPU, RAM, CPU, SSD y Fuente.
@@ -56,6 +60,7 @@ CREATE TABLE products (
   id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
   category_id BIGINT UNSIGNED NOT NULL,
   brand_id BIGINT UNSIGNED NOT NULL,
+  seller_id BIGINT UNSIGNED NULL,
   slug VARCHAR(130) NOT NULL UNIQUE,
   name VARCHAR(140) NOT NULL,
   description TEXT NOT NULL,
@@ -69,8 +74,10 @@ CREATE TABLE products (
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_products_categories FOREIGN KEY (category_id) REFERENCES categories(id),
   CONSTRAINT fk_products_brands FOREIGN KEY (brand_id) REFERENCES brands(id),
+  CONSTRAINT fk_products_seller FOREIGN KEY (seller_id) REFERENCES users(id),
   INDEX idx_products_category (category_id),
   INDEX idx_products_brand (brand_id),
+  INDEX idx_products_seller (seller_id),
   INDEX idx_products_stock (stock)
 ) ENGINE=InnoDB;
 
@@ -107,14 +114,33 @@ CREATE TABLE orders (
   customer_email VARCHAR(160) NOT NULL,
   payment_reference VARCHAR(80) NOT NULL UNIQUE,
   status ENUM('pending', 'paid_simulated', 'cancelled') NOT NULL DEFAULT 'pending',
+  fulfillment_status ENUM('new', 'preparing', 'shipped', 'delivered') NOT NULL DEFAULT 'new',
+  status_updated_at TIMESTAMP NULL,
   subtotal DECIMAL(10,2) NOT NULL DEFAULT 0,
   tax DECIMAL(10,2) NOT NULL DEFAULT 0,
   shipping DECIMAL(10,2) NOT NULL DEFAULT 0,
+  discount DECIMAL(10,2) NOT NULL DEFAULT 0,
+  promotion_code VARCHAR(40) NULL,
   total DECIMAL(10,2) NOT NULL DEFAULT 0,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_orders_users FOREIGN KEY (user_id) REFERENCES users(id),
   INDEX idx_orders_created_at (created_at),
   INDEX idx_orders_status (status)
+) ENGINE=InnoDB;
+
+-- Cupones y promociones aplicables al checkout simulado.
+CREATE TABLE promotions (
+  id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+  code VARCHAR(40) NOT NULL UNIQUE,
+  description VARCHAR(180) NOT NULL,
+  discount_type ENUM('percent', 'fixed') NOT NULL DEFAULT 'percent',
+  discount_value DECIMAL(10,2) NOT NULL,
+  active TINYINT(1) NOT NULL DEFAULT 1,
+  starts_at TIMESTAMP NULL,
+  ends_at TIMESTAMP NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_promotions_active (active),
+  INDEX idx_promotions_code (code)
 ) ENGINE=InnoDB;
 
 -- Detalle de productos comprados en cada pedido.

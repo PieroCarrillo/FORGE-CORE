@@ -49,6 +49,39 @@ export function parseRegisterPayload(value: unknown) {
   return { name, username, email, password };
 }
 
+export function parsePasswordResetRequest(value: unknown) {
+  if (!value || typeof value !== 'object') {
+    throw new Error('payload de recuperacion invalido');
+  }
+
+  const source = value as Record<string, unknown>;
+  const identifier = String(source.identifier ?? source.email ?? source.username ?? '').trim().toLowerCase();
+  if (identifier.length < 3) {
+    throw new Error('usuario o correo invalido');
+  }
+
+  return { identifier };
+}
+
+export function parsePasswordResetConfirm(value: unknown) {
+  if (!value || typeof value !== 'object') {
+    throw new Error('payload de cambio de clave invalido');
+  }
+
+  const source = value as Record<string, unknown>;
+  const token = String(source.token ?? '').trim();
+  const password = String(source.password ?? '');
+
+  if (!/^[a-f0-9]{64}$/i.test(token)) {
+    throw new Error('token de recuperacion invalido');
+  }
+  if (password.length < 8 || password.length > 120) {
+    throw new Error('password debe tener entre 8 y 120 caracteres');
+  }
+
+  return { token, password };
+}
+
 // Validador comun para ids, stock y cantidades.
 export function parsePositiveInteger(value: unknown, field: string) {
   const numberValue = Number(value);
@@ -74,6 +107,30 @@ export function parseOrderItems(value: unknown): OrderItemInput[] {
       quantity: parsePositiveInteger(source.quantity, `items[${index}].quantity`)
     };
   });
+}
+
+export function parseOptionalPromotionCode(value: unknown) {
+  const code = String(value ?? '').trim().toUpperCase();
+  if (!code) return '';
+  if (!/^[A-Z0-9_-]{3,40}$/.test(code)) {
+    throw new Error('codigo promocional invalido');
+  }
+  return code;
+}
+
+export function parseOrderStatusPayload(value: unknown) {
+  if (!value || typeof value !== 'object') {
+    throw new Error('payload de estado invalido');
+  }
+
+  const source = value as Record<string, unknown>;
+  const fulfillmentStatus = String(source.fulfillmentStatus ?? source.fulfillment_status ?? '').trim();
+  const validStatuses = ['new', 'preparing', 'shipped', 'delivered'];
+  if (!validStatuses.includes(fulfillmentStatus)) {
+    throw new Error('estado de pedido invalido');
+  }
+
+  return { fulfillmentStatus };
 }
 
 // Valida el payload del panel Admin antes de insertar/actualizar productos.

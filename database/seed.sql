@@ -3,9 +3,11 @@ USE forge_core;
 -- Usuarios iniciales con login real.
 -- master / MasterForge2026! tiene rol admin.
 -- cliente / ClienteForge2026! tiene rol customer.
+-- vendedor / VendedorForge2026! tiene rol seller.
 INSERT INTO users (name, username, email, role, password_hash, password_salt) VALUES
   ('Master Admin', 'master', 'master@forgecore.local', 'admin', 'c46e2eb877c9bbc6826d6da59f8b72ca245772600533613327343b41c98a41bd', 'forge_master_salt_2026'),
-  ('Cliente Demo', 'cliente', 'cliente@forgecore.local', 'customer', 'b30994206cba6406938afc07f0af7511790ea2b608e95a7a0601116284a2dfd3', 'forge_cliente_salt_2026');
+  ('Cliente Demo', 'cliente', 'cliente@forgecore.local', 'customer', 'b30994206cba6406938afc07f0af7511790ea2b608e95a7a0601116284a2dfd3', 'forge_cliente_salt_2026'),
+  ('Vendedor Demo', 'vendedor', 'vendedor@forgecore.local', 'seller', 'bd880255d1812993d334d570afa5ee325f382389eea480f8b623d0c370b45e77', '25bef455a822e2fba3bd8a74a4e9a085');
 
 -- Categorias visibles en los filtros del frontend.
 INSERT INTO categories (name, slug) VALUES
@@ -23,6 +25,10 @@ INSERT INTO brands (name) VALUES
   ('CrucialX'),
   ('Corsair'),
   ('G.Skill');
+
+INSERT INTO promotions (code, description, discount_type, discount_value, active) VALUES
+  ('FORGE10', '10% de descuento demo para compras academicas.', 'percent', 10.00, 1),
+  ('SETUP25', 'US$25 de descuento para builds completos.', 'fixed', 25.00, 1);
 
 -- Productos iniciales con imagenes locales en /frontend/public/assets/products.
 INSERT INTO products (category_id, brand_id, slug, name, description, image_url, price, stock, rating, specs_json) VALUES

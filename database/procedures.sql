@@ -176,7 +176,8 @@ BEGIN
   ORDER BY p.stock ASC, p.name ASC
   LIMIT 10;
 
-  SELECT id, customer_name, customer_email, payment_reference, total, status, created_at
+  SELECT id, customer_name, customer_email, payment_reference, total, discount,
+         promotion_code, status, fulfillment_status, status_updated_at, created_at
   FROM orders
   ORDER BY created_at DESC
   LIMIT 10;
