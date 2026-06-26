@@ -944,8 +944,8 @@ function App() {
 
         <main className="flex-1">
           {view === 'inicio' && (
-            <section className="grid min-h-[calc(100vh-76px)] content-end gap-8 px-6 pb-10 sm:px-12 sm:pb-16 md:px-20 lg:grid-cols-[minmax(280px,440px)_1fr] lg:px-28 lg:pb-20">
-              <div className="max-w-xs">
+            <section className="mx-auto grid min-h-[calc(100vh-76px)] w-full max-w-7xl items-center gap-8 px-6 py-10 sm:px-12 md:px-20 lg:grid-cols-[minmax(280px,420px)_minmax(560px,1fr)] lg:px-10 xl:px-0">
+              <div className="max-w-sm">
                 <button onClick={() => setView('catalogo')} className="group mb-3 inline-flex items-center gap-1.5 text-[11.5px] font-medium text-blue-400 transition-colors hover:text-blue-300">
                   Gaming hardware listo para batalla
                   <span className="inline-block transition-transform duration-200 group-hover:translate-x-0.5">-&gt;</span>
@@ -962,8 +962,8 @@ function App() {
                 </button>
               </div>
 
-              <div className="hidden self-end md:block">
-                <div className="ml-auto max-w-2xl rounded-lg border border-white/10 bg-black/[0.42] p-4 backdrop-blur-md">
+              <div className="hidden self-center md:block">
+                <div className="ml-auto w-full max-w-3xl rounded-lg border border-white/10 bg-black/[0.42] p-5 backdrop-blur-md">
                   <div className="grid grid-cols-3 gap-3">
                     {isAdmin ? (
                       <>
@@ -1009,45 +1009,6 @@ function App() {
                 </div>
               </div>
 
-              <div className="mt-5 grid gap-5 lg:grid-cols-[0.85fr_1.15fr]">
-                <div className="rounded-lg border border-white/10 bg-black/[0.42] p-5 backdrop-blur">
-                  <p className="text-xs uppercase tracking-[0.2em] text-cyan-200">Resenas del producto</p>
-                  <div className="mt-3 flex items-end gap-3">
-                    <p className="text-4xl font-semibold">{averageRating(productReviews)}</p>
-                    <div className="pb-1">
-                      <ReviewStars rating={Number(averageRating(productReviews)) || selected.rating} />
-                      <p className="mt-1 text-sm text-white/50">{productReviews.length} comentarios en MongoDB</p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => {
-                      setReviewForm((form) => ({ ...form, productId: String(selected.id) }));
-                      setView('comunidad');
-                      window.scrollTo({ top: 0, behavior: 'smooth' });
-                    }}
-                    className="mt-5 inline-flex items-center gap-2 rounded-full bg-cyan-300 px-4 py-2 text-sm font-semibold text-black transition hover:bg-cyan-200"
-                  >
-                    <MessageSquare className="h-4 w-4" />
-                    Escribir resena
-                  </button>
-                </div>
-                <div className="rounded-lg border border-white/10 bg-[#11151d]/[0.92] p-5">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-xl font-semibold">Opiniones recientes</h3>
-                    <span className="rounded-full border border-cyan-200/20 px-3 py-1 text-xs uppercase tracking-[0.16em] text-cyan-100">MongoDB</span>
-                  </div>
-                  <div className="mt-4 grid gap-3">
-                    {productReviews.slice(0, 3).map((review) => (
-                      <ReviewCard key={review.id} review={review} compact onHelpful={markReviewHelpful} />
-                    ))}
-                    {!productReviews.length && (
-                      <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4 text-sm text-white/55">
-                        Este producto aun no tiene resenas. Puedes crear la primera desde Comunidad.
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
             </section>
           )}
 
