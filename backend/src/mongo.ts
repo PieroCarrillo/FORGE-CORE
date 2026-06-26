@@ -20,6 +20,7 @@ export type ProductReviewDocument = {
 };
 
 let mongoClient: MongoClient | null = null;
+let mongoClientReady = false;
 
 export function isMongoConfigured() {
   return Boolean(config.mongodb.uri);
@@ -30,9 +31,27 @@ export async function getMongoClient() {
     throw new Error('MongoDB Atlas no esta configurado');
   }
 
-  if (!mongoClient) {
-    mongoClient = new MongoClient(config.mongodb.uri);
-    await mongoClient.connect();
+  if (mongoClient && mongoClientReady) {
+    try {
+      await mongoClient.db(config.mongodb.database).command({ ping: 1 });
+      return mongoClient;
+    } catch {
+      await mongoClient.close().catch(() => {});
+      mongoClient = null;
+      mongoClientReady = false;
+    }
+  }
+
+  const client = new MongoClient(config.mongodb.uri);
+  try {
+    await client.connect();
+    mongoClient = client;
+    mongoClientReady = true;
+  } catch (error) {
+    await client.close().catch(() => {});
+    mongoClient = null;
+    mongoClientReady = false;
+    throw error;
   }
 
   return mongoClient;
