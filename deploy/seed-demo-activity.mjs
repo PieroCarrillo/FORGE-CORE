@@ -49,7 +49,7 @@ const reviewTemplates = [
   },
   {
     title: 'Ideal para demo de e-commerce',
-    comment: 'La compra simulada queda registrada y luego aparece como compra verificada. Me gusta que el inventario y las resenas esten conectados.'
+    comment: 'La compra simulada queda registrada y luego aparece como compra verificada. Me gusta que el inventario y las reseñas esten conectados.'
   },
   {
     title: 'Compatible y facil de recomendar',
@@ -72,7 +72,7 @@ async function main() {
   `);
 
   if (!products.length) {
-    throw new Error('No hay productos activos para generar compras y resenas.');
+    throw new Error('No hay productos activos para generar compras y reseñas.');
   }
 
   const source = 'demo_activity_v1';
@@ -112,10 +112,12 @@ async function main() {
     users.push(rows[0]);
   }
 
+  const [primaryCustomerRows] = await pool.query("SELECT id, name, email FROM users WHERE username = 'cliente' LIMIT 1");
+  const reviewUsers = primaryCustomerRows[0] ? [primaryCustomerRows[0], ...users] : users;
   const reviewDocs = [];
 
-  for (let userIndex = 0; userIndex < users.length; userIndex += 1) {
-    const user = users[userIndex];
+  for (let userIndex = 0; userIndex < reviewUsers.length; userIndex += 1) {
+    const user = reviewUsers[userIndex];
 
     for (let purchaseIndex = 0; purchaseIndex < 4; purchaseIndex += 1) {
       const product = products[(userIndex * 4 + purchaseIndex) % products.length];
@@ -177,9 +179,10 @@ async function main() {
   await reviews.createIndex({ userId: 1, createdAt: -1 });
   await reviews.createIndex({ source: 1 });
 
-  console.log(`Usuarios demo: ${users.length}`);
-  console.log(`Compras demo: ${users.length * 4}`);
-  console.log(`Resenas demo: ${reviewDocs.length}`);
+  console.log(`Usuarios demo generados: ${users.length}`);
+  console.log(`Cliente principal incluido: ${primaryCustomerRows[0] ? 'si' : 'no'}`);
+  console.log(`Compras demo: ${reviewUsers.length * 4}`);
+  console.log(`Reseñas demo: ${reviewDocs.length}`);
   console.log(`Productos cubiertos: ${new Set(reviewDocs.map((review) => review.productId)).size}/${products.length}`);
 
   await mongo.close();

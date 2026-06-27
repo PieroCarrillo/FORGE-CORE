@@ -338,6 +338,7 @@ function App() {
   const [communityReviews, setCommunityReviews] = useState<ProductReview[]>([]);
   const [accountReviews, setAccountReviews] = useState<ProductReview[]>([]);
   const [adminReviews, setAdminReviews] = useState<ProductReview[]>([]);
+  const [purchasedProducts, setPurchasedProducts] = useState<Product[]>([]);
   const [reviewForm, setReviewForm] = useState<ReviewForm>({
     productId: String(seedProducts[0].id),
     rating: '5',
@@ -379,7 +380,7 @@ function App() {
     {
       id: 'welcome',
       role: 'assistant',
-      text: 'Hola, soy Forge Bot. Puedo recomendarte GPU, CPU, RAM, SSD o fuente leyendo productos de MariaDB y resenas de MongoDB. Preguntame algo como: Que grafica me conviene para 4K con $900?'
+      text: 'Hola, soy Forge Bot. Puedo recomendarte GPU, CPU, RAM, SSD o fuente leyendo productos de MariaDB y reseñas de MongoDB. Preguntame algo como: Que grafica me conviene para 4K con $900?'
     }
   ]);
   const [cartToast, setCartToast] = useState<CartToast | null>(null);
@@ -455,6 +456,7 @@ function App() {
     setAccountOrders([]);
     setAccountReviews([]);
     setAdminReviews([]);
+    setPurchasedProducts([]);
     setCommunityReviews([]);
     setProductReviews([]);
     setCart([]);
@@ -524,6 +526,7 @@ function App() {
     void loadPromotions();
     void loadAccountOrders();
     void loadAccountReviews();
+    void loadPurchasedProducts();
     void loadCommunityReviews();
   }, [authToken, authUser?.id]);
 
@@ -542,9 +545,20 @@ function App() {
 
   useEffect(() => {
     if (!authUser || !productList.length) return;
-    setReviewForm((form) => ({ ...form, productId: form.productId || String(productList[0].id) }));
     void loadCommunityReviews();
   }, [authToken, authUser?.id, productList.length]);
+
+  useEffect(() => {
+    if (!authUser) return;
+    setReviewForm((form) => {
+      if (!purchasedProducts.length) return { ...form, productId: '' };
+      const currentProductStillPurchased = purchasedProducts.some((product) => String(product.id) === form.productId);
+      return {
+        ...form,
+        productId: currentProductStillPurchased ? form.productId : String(purchasedProducts[0].id)
+      };
+    });
+  }, [authUser, purchasedProducts]);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -662,6 +676,20 @@ function App() {
       setAccountOrders((await response.json()) as OrderSummary[]);
     } catch {
       setAccountOrders([]);
+    }
+  }
+
+  async function loadPurchasedProducts() {
+    try {
+      const response = await apiFetch('/api/account/purchased-products');
+      if (!response.ok) {
+        setPurchasedProducts([]);
+        return;
+      }
+      const data = (await response.json()) as Array<Omit<Product, 'accent'> & { accent?: string }>;
+      setPurchasedProducts(data.map((product, index) => normalizeProduct(product, index)));
+    } catch {
+      setPurchasedProducts([]);
     }
   }
 
@@ -835,7 +863,7 @@ function App() {
         {
           id: `assistant-${Date.now()}`,
           role: 'assistant',
-          text: data.reply ?? 'Ya revise el catalogo y las resenas, pero no encontre una recomendacion clara.',
+          text: data.reply ?? 'Ya revise el catalogo y las reseñas, pero no encontre una recomendacion clara.',
           recommendations: data.recommendations ?? []
         }
       ]);
@@ -1018,6 +1046,10 @@ function App() {
 
     try {
       const productId = Number(reviewForm.productId);
+      if (!productId || !purchasedProducts.some((product) => product.id === productId)) {
+        throw new Error('Primero compra el producto para publicar una reseña verificada');
+      }
+
       const response = await apiFetch(`/api/products/${productId}/reviews`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1098,6 +1130,7 @@ function App() {
       setPromotionCode('');
       await refreshStoreData();
       await loadAccountOrders();
+      await loadPurchasedProducts();
     } catch (error) {
       setPaymentStatus('failed');
       setPaymentMessage(error instanceof Error ? error.message : 'No se pudo simular el pago');
@@ -1461,8 +1494,11 @@ function App() {
                     <h3 className="mt-2 text-2xl font-semibold">Opiniones sobre {selected.name}</h3>
                   </div>
                   <div className="rounded-lg border border-white/10 bg-white/[0.06] px-4 py-3 text-right">
-                    <p className="text-2xl font-semibold text-white">{averageRating(productReviews)}</p>
-                    <p className="text-xs uppercase tracking-[0.14em] text-white/45">{productReviews.length} resenas</p>
+                    <div className="flex items-center justify-end gap-2 text-amber-200">
+                      <Star className="h-5 w-5 fill-current" />
+                      <p className="text-2xl font-semibold text-white">{averageRating(productReviews)}</p>
+                    </div>
+                    <p className="text-xs uppercase tracking-[0.14em] text-white/45">{productReviews.length} reseñas</p>
                   </div>
                 </div>
                 <div className="mt-5 grid gap-3 lg:grid-cols-2">
@@ -1471,7 +1507,7 @@ function App() {
                   ))}
                   {!productReviews.length && (
                     <div className="rounded-lg border border-white/10 bg-white/[0.04] p-5 text-sm text-white/55 lg:col-span-2">
-                      Este producto todavia no tiene resenas publicadas. Puedes crear una desde Comunidad.
+                      Este producto todavia no tiene reseñas publicadas. Puedes crear una desde Comunidad.
                     </div>
                   )}
                 </div>
@@ -1549,13 +1585,13 @@ function App() {
 
           {view === 'comunidad' && (
             <section className="px-5 py-10 sm:px-10 lg:px-16">
-              <SectionHeader eyebrow="Comunidad con MongoDB Atlas" title="Resenas reales por usuario registrado" />
+              <SectionHeader eyebrow="Comunidad con MongoDB Atlas" title="Reseñas reales por usuario registrado" />
               <div className="mt-8 grid gap-5 lg:grid-cols-[420px_1fr]">
                 <form onSubmit={submitReview} className="h-fit rounded-lg border border-white/10 bg-[#11151d]/[0.94] p-5 shadow-glow">
                   <div className="flex items-center justify-between gap-3">
                     <h3 className="flex items-center gap-2 text-xl font-semibold">
                       <MessageSquare className="h-5 w-5 text-cyan-200" />
-                      Nueva resena
+                      Nueva reseña
                     </h3>
                     <span className="rounded-full border border-cyan-200/20 px-3 py-1 text-xs uppercase tracking-[0.16em] text-cyan-100">MongoDB</span>
                   </div>
@@ -1565,13 +1601,23 @@ function App() {
 
                   <div className="mt-5 grid gap-3">
                     <AdminField label="Producto">
-                      <select value={reviewForm.productId} onChange={(event) => setReviewForm((form) => ({ ...form, productId: event.target.value }))} className="field-control">
-                        {productList.map((product) => (
+                      <select
+                        value={reviewForm.productId}
+                        onChange={(event) => setReviewForm((form) => ({ ...form, productId: event.target.value }))}
+                        className="field-control"
+                        disabled={!purchasedProducts.length}
+                      >
+                        {purchasedProducts.map((product) => (
                           <option key={product.id} value={product.id}>
                             {product.name}
                           </option>
                         ))}
                       </select>
+                      {!purchasedProducts.length && (
+                        <p className="mt-2 text-xs leading-5 text-amber-100/75">
+                          Primero compra un producto con este usuario para poder publicar una reseña verificada.
+                        </p>
+                      )}
                     </AdminField>
                     <AdminField label="Calificacion">
                       <select value={reviewForm.rating} onChange={(event) => setReviewForm((form) => ({ ...form, rating: event.target.value }))} className="field-control">
@@ -1607,9 +1653,9 @@ function App() {
                     </label>
                   </div>
 
-                  <button disabled={reviewStatus === 'saving'} className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-full bg-cyan-300 px-5 py-3 font-semibold text-black transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-60">
+                  <button disabled={reviewStatus === 'saving' || !purchasedProducts.length} className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-full bg-cyan-300 px-5 py-3 font-semibold text-black transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-60">
                     <MessageSquare className="h-4 w-4" />
-                    {reviewStatus === 'saving' ? 'Guardando...' : 'Publicar resena'}
+                    {reviewStatus === 'saving' ? 'Guardando...' : 'Publicar reseña'}
                   </button>
                   {reviewMessage && (
                     <p className={`mt-4 rounded-lg border p-3 text-sm ${reviewStatus === 'saved' ? 'border-lime-300/40 bg-lime-300/10 text-lime-100' : 'border-red-300/40 bg-red-300/10 text-red-100'}`}>
@@ -1632,7 +1678,7 @@ function App() {
                     ))}
                     {!communityReviews.length && (
                       <div className="rounded-lg border border-white/10 bg-white/[0.04] p-5 text-sm leading-6 text-white/55 xl:col-span-2">
-                        Todavia no hay resenas publicadas. Cuando configures MongoDB Atlas y un cliente publique una opinion, aparecera aqui.
+                        Todavia no hay reseñas publicadas. Cuando configures MongoDB Atlas y un cliente publique una opinion, aparecera aqui.
                       </div>
                     )}
                   </div>
@@ -1643,7 +1689,7 @@ function App() {
 
           {view === 'perfil' && (
             <section className="px-5 py-10 sm:px-10 lg:px-16">
-              <SectionHeader eyebrow="Perfil del comprador" title="Cuenta, pedidos en MariaDB y resenas en MongoDB" />
+              <SectionHeader eyebrow="Perfil del comprador" title="Cuenta, pedidos en MariaDB y reseñas en MongoDB" />
               <div className="mt-8 grid gap-5 lg:grid-cols-[0.85fr_1.15fr]">
                 <div className="h-fit rounded-lg border border-white/10 bg-[#11151d]/[0.92] p-5">
                   <div className="flex items-center gap-4">
@@ -1682,7 +1728,7 @@ function App() {
                   <div className="flex items-center justify-between gap-3">
                     <h3 className="flex items-center gap-2 text-xl font-semibold">
                       <MessageSquare className="h-5 w-5 text-cyan-200" />
-                      Mis resenas
+                      Mis reseñas
                     </h3>
                     <button onClick={loadAccountReviews} className="rounded-full border border-white/10 px-3 py-1.5 text-sm text-white/70 hover:bg-white/10">Actualizar</button>
                   </div>
@@ -1690,7 +1736,7 @@ function App() {
                     {accountReviews.map((review) => (
                       <ReviewCard key={review.id} review={review} compact onHelpful={markReviewHelpful} />
                     ))}
-                    {!accountReviews.length && <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4 text-sm text-white/55">Aun no publicaste resenas.</div>}
+                    {!accountReviews.length && <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4 text-sm text-white/55">Aun no publicaste reseñas.</div>}
                   </div>
                 </div>
               </div>
@@ -1705,7 +1751,7 @@ function App() {
                   <Metric label="Ventas simuladas" value={`$${formatMoney(dashboard?.summary.simulated_revenue ?? dashboard?.summary.total_revenue ?? 0)}`} icon={<BarChart3 className="h-5 w-5" />} />
                   <Metric label="Pedidos BD" value={String(dashboard?.summary.order_count ?? dashboard?.summary.total_orders ?? 0)} icon={<ShoppingCart className="h-5 w-5" />} />
                   <Metric label="Usuarios" value={String(adminUsers.length)} icon={<Users className="h-5 w-5" />} />
-                  <Metric label="Resenas MongoDB" value={String(adminReviews.length)} icon={<MessageSquare className="h-5 w-5" />} />
+                  <Metric label="Reseñas MongoDB" value={String(adminReviews.length)} icon={<MessageSquare className="h-5 w-5" />} />
                 </div>
               ) : (
                 <div className="mt-8 grid gap-4 md:grid-cols-3">
@@ -1922,7 +1968,7 @@ function App() {
                   ))}
                   {!adminReviews.length && (
                     <div className="rounded-lg border border-white/10 bg-white/[0.04] p-5 text-sm text-white/55 lg:col-span-2">
-                      Sin resenas en MongoDB por ahora.
+                      Sin reseñas en MongoDB por ahora.
                     </div>
                   )}
                 </div>
@@ -2028,7 +2074,7 @@ function AssistantBubble({
                               {recommendation.category} | ${recommendation.price.toLocaleString('en-US')} | Stock {recommendation.stock}
                             </span>
                             <span className="mt-1 block text-xs text-cyan-100/65">
-                              {recommendation.reviewCount} resenas | {recommendation.reviewAverage}/5
+                              {recommendation.reviewCount} reseñas | {recommendation.reviewAverage}/5
                             </span>
                           </span>
                         </button>
@@ -2040,7 +2086,7 @@ function AssistantBubble({
             ))}
             {status === 'thinking' && (
               <div className="w-fit rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2 text-sm text-white/60">
-                Revisando catalogo y resenas...
+                Revisando catalogo y reseñas...
               </div>
             )}
           </div>

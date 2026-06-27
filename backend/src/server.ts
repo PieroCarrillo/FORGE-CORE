@@ -19,6 +19,7 @@ import {
   listLocalCategories,
   listLocalMetrics,
   listLocalOrdersForUser,
+  listLocalPurchasedProducts,
   listLocalReviews,
   listLocalReviewsForUser,
   listLocalProducts,
@@ -127,6 +128,27 @@ async function hasVerifiedPurchase(userId: number, userEmail: string, productId:
     [userId, userEmail, productId]
   );
   return rows.length > 0;
+}
+
+async function listPurchasedProducts(userId: number, userEmail: string) {
+  const [rows] = await pool.query<ProductRow[]>(
+    `
+      SELECT DISTINCT p.id, p.slug, p.name, c.name AS category_name, b.name AS brand_name,
+             p.price, p.stock, p.rating, p.description, p.image_url, p.specs_json,
+             p.active
+      FROM orders o
+      JOIN order_items oi ON oi.order_id = o.id
+      JOIN products p ON p.id = oi.product_id
+      JOIN categories c ON c.id = p.category_id
+      JOIN brands b ON b.id = p.brand_id
+      WHERE (o.user_id = ? OR o.customer_email = ?)
+        AND o.status = 'paid_simulated'
+        AND p.active = 1
+      ORDER BY p.name ASC
+    `,
+    [userId, userEmail]
+  );
+  return rows.map(toProduct);
 }
 
 function getCartSessionToken(userId: number) {
@@ -330,8 +352,8 @@ function buildAssistantReply(message: string, products: AssistantProduct[]) {
   const categoryText = category ? ` para ${category}` : '';
   const budgetText = budget ? ` y considerando un presupuesto cercano a $${budget}` : '';
   const reviewText = main.reviewCount
-    ? ` Tiene ${main.reviewCount} resena(s) con promedio ${main.reviewAverage.toFixed(1)}/5; eso ayuda a validar la recomendacion con opiniones reales.`
-    : ' Aun no tiene muchas resenas, asi que priorice sus especificaciones, stock y precio.';
+    ? ` Tiene ${main.reviewCount} reseña(s) con promedio ${main.reviewAverage.toFixed(1)}/5; eso ayuda a validar la recomendacion con opiniones reales.`
+    : ' Aun no tiene muchas reseñas, asi que priorice sus especificaciones, stock y precio.';
   const snippets = main.reviewSnippets.length ? ` Comentarios destacados: ${main.reviewSnippets.slice(0, 2).join(' | ')}` : '';
 
   return {
@@ -801,6 +823,12 @@ app.post('/api/products/:id/reviews', requireAuth, async (req: AuthRequest, res,
       return;
     }
 
+    const verifiedPurchase = await hasVerifiedPurchase(req.authUser!.id, req.authUser!.email, productId);
+    if (!verifiedPurchase) {
+      res.status(403).json({ error: 'Primero debes comprar este producto para publicar una reseña' });
+      return;
+    }
+
     const now = new Date();
     const review: ProductReviewDocument = {
       userId: req.authUser!.id,
@@ -811,7 +839,7 @@ app.post('/api/products/:id/reviews', requireAuth, async (req: AuthRequest, res,
       rating: payload.rating,
       title: payload.title,
       comment: payload.comment,
-      verifiedPurchase: await hasVerifiedPurchase(req.authUser!.id, req.authUser!.email, productId),
+      verifiedPurchase,
       helpfulUserIds: [],
       helpfulCount: 0,
       status: 'published',
@@ -989,6 +1017,19 @@ app.get('/api/account/orders', requireAuth, async (req: AuthRequest, res, next) 
   }
 });
 
+app.get('/api/account/purchased-products', requireAuth, async (req: AuthRequest, res, next) => {
+  try {
+    if (config.useMockData) {
+      res.json(listLocalPurchasedProducts(req.authUser!.id));
+      return;
+    }
+
+    res.json(await listPurchasedProducts(req.authUser!.id, req.authUser!.email));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/api/account/reviews', requireAuth, async (req: AuthRequest, res, next) => {
   try {
     if (config.useMockData) {
@@ -1051,7 +1092,7 @@ app.post('/api/reviews/:id/helpful', requireAuth, async (req: AuthRequest, res, 
       return;
     }
     if (!ObjectId.isValid(reviewId)) {
-      res.status(400).json({ error: 'id de resena invalido' });
+      res.status(400).json({ error: 'id de reseña invalido' });
       return;
     }
 
@@ -1065,7 +1106,7 @@ app.post('/api/reviews/:id/helpful', requireAuth, async (req: AuthRequest, res, 
     );
     const review = await collection.findOne({ _id: new ObjectId(reviewId) });
     if (!review) {
-      res.status(404).json({ error: 'Resena no encontrada' });
+      res.status(404).json({ error: 'Reseña no encontrada' });
       return;
     }
     await collection.updateOne(
@@ -1133,7 +1174,7 @@ app.delete('/api/admin/reviews/:id', requireAdmin, async (req, res, next) => {
       return;
     }
     if (!ObjectId.isValid(reviewId)) {
-      res.status(400).json({ error: 'id de resena invalido' });
+      res.status(400).json({ error: 'id de reseña invalido' });
       return;
     }
 
@@ -1395,7 +1436,9 @@ app.delete('/api/admin/products/:id', requireProductManager, async (req, res, ne
 // Manejador central de errores para que la API responda JSON uniforme.
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   const message = error instanceof Error ? error.message : 'Error inesperado';
-  const status = message.includes('Stock insuficiente') || message.includes('no existe') || message.includes('invalido') || message.includes('debe tener') ? 400 : 500;
+  const status =
+    message.includes('Primero debes comprar') ? 403 :
+    message.includes('Stock insuficiente') || message.includes('no existe') || message.includes('invalido') || message.includes('debe tener') ? 400 : 500;
   res.status(status).json({ error: message });
 });
 

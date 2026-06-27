@@ -53,6 +53,7 @@ type LocalOrder = {
   total: number;
   status: string;
   created_at: string;
+  items: OrderItemInput[];
 };
 
 type LocalUser = {
@@ -460,7 +461,8 @@ export function createLocalSimulatedOrder(customerName: string, customerEmail: s
     shipping: quote.shipping,
     total: quote.total,
     status: 'paid_simulated',
-    created_at: new Date().toISOString()
+    created_at: new Date().toISOString(),
+    items: items.map((item) => ({ ...item }))
   };
 
   orders.unshift(order);
@@ -472,10 +474,31 @@ export function listLocalOrdersForUser(userId: number) {
   return orders.filter((order) => order.user_id === userId || order.customer_email === users.find((user) => user.id === userId)?.email);
 }
 
+export function listLocalPurchasedProducts(userId: number) {
+  const user = users.find((item) => item.id === userId);
+  if (!user) return [];
+
+  const purchasedIds = new Set<number>();
+  for (const order of orders) {
+    const belongsToUser = order.user_id === userId || order.customer_email === user.email;
+    if (!belongsToUser || order.status !== 'paid_simulated') continue;
+    for (const item of order.items) {
+      purchasedIds.add(item.productId);
+    }
+  }
+
+  return activeProducts()
+    .filter((product) => purchasedIds.has(product.id))
+    .map(toApiProduct);
+}
+
 function userHasPurchasedProduct(userId: number, productId: number) {
   const user = users.find((item) => item.id === userId);
   if (!user) return false;
-  return orders.some((order) => (order.user_id === userId || order.customer_email === user.email) && order.status === 'paid_simulated');
+  return orders.some((order) => {
+    const belongsToUser = order.user_id === userId || order.customer_email === user.email;
+    return belongsToUser && order.status === 'paid_simulated' && order.items.some((item) => item.productId === productId);
+  });
 }
 
 function toApiReview(review: LocalReview) {
@@ -530,6 +553,9 @@ export function createLocalReview(payload: {
   const product = products.find((item) => item.id === payload.productId);
   if (!product) {
     throw new Error('Producto no existe');
+  }
+  if (!userHasPurchasedProduct(payload.userId, payload.productId)) {
+    throw new Error('Primero debes comprar este producto para publicar una reseña');
   }
 
   const now = new Date().toISOString();
