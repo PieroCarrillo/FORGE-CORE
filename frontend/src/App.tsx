@@ -22,6 +22,7 @@ import {
   Settings,
   ShieldCheck,
   ShoppingCart,
+  SlidersHorizontal,
   Sparkles,
   Star,
   ThumbsUp,
@@ -171,6 +172,13 @@ type AdminProductForm = {
   imageUrl: string;
   specs: string;
   description: string;
+};
+
+type AdminPromotionForm = {
+  code: string;
+  description: string;
+  discountType: 'percent' | 'fixed';
+  discountValue: string;
 };
 
 type AuthForm = {
@@ -373,6 +381,20 @@ function App() {
   const [adminProductForm, setAdminProductForm] = useState<AdminProductForm>(() => createDemoProductForm());
   const [adminSaveStatus, setAdminSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle');
   const [adminSaveMessage, setAdminSaveMessage] = useState('');
+  const [adminPromotionForm, setAdminPromotionForm] = useState<AdminPromotionForm>({
+    code: 'FORGE15',
+    description: '15% de descuento demo para productos seleccionados.',
+    discountType: 'percent',
+    discountValue: '15'
+  });
+  const [adminPromotionStatus, setAdminPromotionStatus] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle');
+  const [adminPromotionMessage, setAdminPromotionMessage] = useState('');
+  const [adminUserPage, setAdminUserPage] = useState(1);
+  const [adminOrdersPage, setAdminOrdersPage] = useState(1);
+  const [adminStockPage, setAdminStockPage] = useState(1);
+  const [adminProductsPage, setAdminProductsPage] = useState(1);
+  const [adminReviewsPage, setAdminReviewsPage] = useState(1);
+  const [adminReviewRatingFilter, setAdminReviewRatingFilter] = useState<'all' | '5' | '4' | '3' | '2' | '1'>('all');
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [assistantInput, setAssistantInput] = useState('');
   const [assistantStatus, setAssistantStatus] = useState<'idle' | 'thinking' | 'error'>('idle');
@@ -411,6 +433,16 @@ function App() {
       : Math.min(subtotal, Number(activePromotion.discount_value))
     : 0;
   const total = Math.max(0, subtotal + tax + shipping - discount);
+  const adminLatestOrders = dashboard?.latestOrders ?? [];
+  const adminLowStockItems = dashboard?.lowStock?.length ? dashboard.lowStock : productList.filter((product) => product.stock <= 5);
+  const filteredAdminReviews = adminReviewRatingFilter === 'all'
+    ? adminReviews
+    : adminReviews.filter((review) => review.rating === Number(adminReviewRatingFilter));
+  const pagedAdminUsers = paginate(adminUsers, adminUserPage, 6);
+  const pagedAdminOrders = paginate(adminLatestOrders, adminOrdersPage, 4);
+  const pagedAdminStock = paginate(adminLowStockItems, adminStockPage, 5);
+  const pagedAdminProducts = paginate(productList, adminProductsPage, 12);
+  const pagedAdminReviews = paginate(filteredAdminReviews, adminReviewsPage, 8);
 
   useEffect(() => {
     const syncViewFromHash = () => setView(readViewFromHash());
@@ -630,6 +662,26 @@ function App() {
     const timer = window.setTimeout(() => setCartToast(null), 2600);
     return () => window.clearTimeout(timer);
   }, [cartToast]);
+
+  useEffect(() => {
+    setAdminUserPage(1);
+  }, [adminUsers.length]);
+
+  useEffect(() => {
+    setAdminOrdersPage(1);
+  }, [adminLatestOrders.length]);
+
+  useEffect(() => {
+    setAdminStockPage(1);
+  }, [adminLowStockItems.length]);
+
+  useEffect(() => {
+    setAdminProductsPage(1);
+  }, [productList.length]);
+
+  useEffect(() => {
+    setAdminReviewsPage(1);
+  }, [adminReviewRatingFilter, adminReviews.length]);
 
   async function loadPersistentCart() {
     try {
@@ -998,6 +1050,38 @@ function App() {
     } catch (error) {
       setAdminSaveStatus('failed');
       setAdminSaveMessage(error instanceof Error ? error.message : 'No se pudo crear el producto');
+    }
+  }
+
+  async function createAdminPromotion(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setAdminPromotionStatus('saving');
+    setAdminPromotionMessage('');
+
+    try {
+      const response = await apiFetch('/api/admin/promotions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: adminPromotionForm.code,
+          description: adminPromotionForm.description,
+          discountType: adminPromotionForm.discountType,
+          discountValue: Number(adminPromotionForm.discountValue)
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error ?? 'No se pudo guardar el cupon');
+      }
+
+      setAdminPromotionStatus('saved');
+      setAdminPromotionMessage(`Cupon ${data.code ?? adminPromotionForm.code.toUpperCase()} guardado en MariaDB.`);
+      await Promise.all([loadPromotions(), isAdmin ? apiFetch('/api/admin/reports').then(async (reportsResponse) => {
+        if (reportsResponse.ok) setAdminReports((await reportsResponse.json()) as AdminReports);
+      }) : Promise.resolve()]);
+    } catch (error) {
+      setAdminPromotionStatus('failed');
+      setAdminPromotionMessage(error instanceof Error ? error.message : 'No se pudo guardar el cupon');
     }
   }
 
@@ -1783,7 +1867,7 @@ function App() {
                     Usuarios registrados
                   </h3>
                   <div className="mt-5 space-y-3">
-                    {adminUsers.slice(0, 6).map((user) => (
+                    {pagedAdminUsers.items.map((user) => (
                       <div key={user.id} className="flex items-center justify-between rounded-lg border border-white/10 bg-white/[0.06] p-3">
                         <div>
                           <p className="font-medium">{user.name}</p>
@@ -1792,11 +1876,13 @@ function App() {
                         <span className={`rounded-full px-3 py-1 text-xs uppercase tracking-[0.12em] ${user.role === 'admin' ? 'bg-amber-300 text-black' : user.role === 'seller' ? 'bg-lime-300 text-black' : 'bg-cyan-300 text-black'}`}>{user.role}</span>
                       </div>
                     ))}
+                    <PaginationControls page={adminUserPage} totalPages={pagedAdminUsers.totalPages} onPageChange={setAdminUserPage} />
                   </div>
                 </div>
               </div>}
 
               <div className="mt-5 grid gap-5 xl:grid-cols-[1.05fr_0.95fr]">
+                <div className="space-y-5">
                 <form onSubmit={createAdminProduct} className="rounded-lg border border-white/10 bg-[#11151d]/[0.92] p-5">
                   <div className="flex items-center justify-between gap-4">
                     <h3 className="flex items-center gap-2 text-xl font-semibold">
@@ -1852,6 +1938,88 @@ function App() {
                   )}
                   {adminSaveMessage && <p className={`mt-4 rounded-lg border p-3 text-sm ${adminSaveStatus === 'saved' ? 'border-lime-300/40 bg-lime-300/10 text-lime-100' : 'border-red-300/40 bg-red-300/10 text-red-100'}`}>{adminSaveMessage}</p>}
                 </form>
+                {isAdmin && (
+                  <form onSubmit={createAdminPromotion} className="rounded-lg border border-white/10 bg-[#11151d]/[0.92] p-5">
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <h3 className="flex items-center gap-2 text-lg font-semibold">
+                          <Sparkles className="h-5 w-5 text-cyan-200" />
+                          Crear cupon demo
+                        </h3>
+                        <p className="mt-1 text-sm text-white/50">Queda activo para el checkout simulado.</p>
+                      </div>
+                      <span className="rounded-full border border-cyan-200/20 px-3 py-1 text-xs uppercase tracking-[0.16em] text-cyan-100">Admin</span>
+                    </div>
+                    <div className="mt-4 grid gap-3 md:grid-cols-[0.8fr_1.2fr]">
+                      <AdminField label="Codigo">
+                        <input
+                          required
+                          value={adminPromotionForm.code}
+                          onChange={(event) => {
+                            setAdminPromotionForm((form) => ({ ...form, code: event.target.value.toUpperCase() }));
+                            setAdminPromotionStatus('idle');
+                          }}
+                          className="field-control"
+                          placeholder="FORGE15"
+                        />
+                      </AdminField>
+                      <AdminField label="Descripcion">
+                        <input
+                          required
+                          value={adminPromotionForm.description}
+                          onChange={(event) => {
+                            setAdminPromotionForm((form) => ({ ...form, description: event.target.value }));
+                            setAdminPromotionStatus('idle');
+                          }}
+                          className="field-control"
+                          placeholder="Descuento para demo"
+                        />
+                      </AdminField>
+                      <AdminField label="Tipo">
+                        <select
+                          value={adminPromotionForm.discountType}
+                          onChange={(event) => {
+                            setAdminPromotionForm((form) => ({ ...form, discountType: event.target.value as AdminPromotionForm['discountType'] }));
+                            setAdminPromotionStatus('idle');
+                          }}
+                          className="field-control"
+                        >
+                          <option value="percent">Porcentaje</option>
+                          <option value="fixed">Monto fijo USD</option>
+                        </select>
+                      </AdminField>
+                      <AdminField label="Valor">
+                        <input
+                          required
+                          min="1"
+                          max={adminPromotionForm.discountType === 'percent' ? '90' : undefined}
+                          type="number"
+                          value={adminPromotionForm.discountValue}
+                          onChange={(event) => {
+                            setAdminPromotionForm((form) => ({ ...form, discountValue: event.target.value }));
+                            setAdminPromotionStatus('idle');
+                          }}
+                          className="field-control"
+                        />
+                      </AdminField>
+                    </div>
+                    <button disabled={adminPromotionStatus === 'saving'} className="mt-4 inline-flex items-center gap-2 rounded-full bg-cyan-300 px-5 py-3 text-sm font-semibold text-black transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-60">
+                      <Database className="h-4 w-4" />
+                      {adminPromotionStatus === 'saving' ? 'Guardando...' : 'Guardar cupon'}
+                    </button>
+                    {!!availablePromotions.length && (
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {availablePromotions.slice(0, 5).map((promotion) => (
+                          <span key={promotion.code} className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-xs text-white/60">
+                            {promotion.code}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {adminPromotionMessage && <p className={`mt-4 rounded-lg border p-3 text-sm ${adminPromotionStatus === 'saved' ? 'border-lime-300/40 bg-lime-300/10 text-lime-100' : 'border-red-300/40 bg-red-300/10 text-red-100'}`}>{adminPromotionMessage}</p>}
+                  </form>
+                )}
+                </div>
                 <div className="rounded-lg border border-white/10 bg-[#11151d]/[0.92] p-5">
                   <h3 className="flex items-center gap-2 text-xl font-semibold">
                     <PackageCheck className="h-5 w-5 text-cyan-200" />
@@ -1859,7 +2027,7 @@ function App() {
                   </h3>
                   <div className="mt-5 grid gap-4">
                     <div className="space-y-3">
-                      {(dashboard?.latestOrders ?? []).slice(0, 4).map((order) => (
+                      {pagedAdminOrders.items.map((order) => (
                         <div key={order.id} className="rounded-lg border border-white/10 bg-white/[0.04] p-3">
                           <OrderRow order={order} plain />
                           <div className="mt-3 flex flex-wrap gap-2">
@@ -1877,11 +2045,12 @@ function App() {
                           </div>
                         </div>
                       ))}
-                      {!dashboard?.latestOrders?.length && <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4 text-sm text-white/55">Sin pedidos todavia.</div>}
+                      {!adminLatestOrders.length && <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4 text-sm text-white/55">Sin pedidos todavia.</div>}
+                      <PaginationControls page={adminOrdersPage} totalPages={pagedAdminOrders.totalPages} onPageChange={setAdminOrdersPage} />
                     </div>
                     <div className="h-px bg-white/10" />
                     <div className="space-y-3">
-                      {(dashboard?.lowStock?.length ? dashboard.lowStock : productList.filter((product) => product.stock <= 5)).slice(0, 5).map((product) => (
+                      {pagedAdminStock.items.map((product) => (
                         <div key={product.id} className="flex items-center justify-between rounded-lg border border-white/10 bg-white/[0.06] p-3">
                           <div>
                             <p className="font-medium">{product.name}</p>
@@ -1890,6 +2059,7 @@ function App() {
                           <span className="rounded-full bg-amber-300 px-3 py-1 text-sm text-black">{product.stock} und.</span>
                         </div>
                       ))}
+                      <PaginationControls page={adminStockPage} totalPages={pagedAdminStock.totalPages} onPageChange={setAdminStockPage} />
                     </div>
                   </div>
                 </div>
@@ -1907,7 +2077,7 @@ function App() {
                   <button onClick={resetProductForm} className="rounded-full border border-white/10 px-4 py-2 text-sm text-white/70 hover:bg-white/10">Nuevo producto</button>
                 </div>
                 <div className="mt-5 overflow-hidden rounded-lg border border-white/10">
-                  {productList.slice(0, 12).map((product) => (
+                  {pagedAdminProducts.items.map((product) => (
                     <div key={product.id} className="grid gap-3 border-b border-white/10 bg-white/[0.04] p-3 last:border-b-0 md:grid-cols-[1fr_110px_90px_180px] md:items-center">
                       <div>
                         <p className="font-semibold">{product.name}</p>
@@ -1922,6 +2092,7 @@ function App() {
                     </div>
                   ))}
                 </div>
+                <PaginationControls page={adminProductsPage} totalPages={pagedAdminProducts.totalPages} onPageChange={setAdminProductsPage} className="mt-4" />
               </div>
 
               {isAdmin && <div className="mt-5 rounded-lg border border-white/10 bg-[#11151d]/[0.92] p-5">
@@ -1952,26 +2123,44 @@ function App() {
                     </h3>
                     <p className="mt-1 text-sm text-white/50">Documentos de MongoDB Atlas: publicados, ocultos y utiles.</p>
                   </div>
-                  <button
-                    onClick={async () => {
-                      const response = await apiFetch('/api/admin/reviews');
-                      if (response.ok) setAdminReviews((await response.json()) as ProductReview[]);
-                    }}
-                    className="rounded-full border border-white/10 px-4 py-2 text-sm text-white/70 hover:bg-white/10"
-                  >
-                    Actualizar
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white/70">
+                      <SlidersHorizontal className="h-4 w-4 text-cyan-200" />
+                      <select
+                        value={adminReviewRatingFilter}
+                        onChange={(event) => setAdminReviewRatingFilter(event.target.value as typeof adminReviewRatingFilter)}
+                        className="bg-transparent text-sm outline-none"
+                      >
+                        <option value="all">Todas</option>
+                        <option value="5">5 estrellas</option>
+                        <option value="4">4 estrellas</option>
+                        <option value="3">3 estrellas</option>
+                        <option value="2">2 estrellas</option>
+                        <option value="1">1 estrella</option>
+                      </select>
+                    </label>
+                    <button
+                      onClick={async () => {
+                        const response = await apiFetch('/api/admin/reviews');
+                        if (response.ok) setAdminReviews((await response.json()) as ProductReview[]);
+                      }}
+                      className="rounded-full border border-white/10 px-4 py-2 text-sm text-white/70 hover:bg-white/10"
+                    >
+                      Actualizar
+                    </button>
+                  </div>
                 </div>
                 <div className="mt-5 grid gap-3 lg:grid-cols-2">
-                  {adminReviews.slice(0, 8).map((review) => (
+                  {pagedAdminReviews.items.map((review) => (
                     <ReviewCard key={review.id} review={review} onHide={hideReview} />
                   ))}
-                  {!adminReviews.length && (
+                  {!filteredAdminReviews.length && (
                     <div className="rounded-lg border border-white/10 bg-white/[0.04] p-5 text-sm text-white/55 lg:col-span-2">
                       Sin reseñas en MongoDB por ahora.
                     </div>
                   )}
                 </div>
+                <PaginationControls page={adminReviewsPage} totalPages={pagedAdminReviews.totalPages} onPageChange={setAdminReviewsPage} className="mt-4" />
               </div>}
             </section>
           )}
@@ -2195,6 +2384,46 @@ function AdminField({ label, children }: { label: string; children: ReactNode })
   );
 }
 
+function PaginationControls({
+  page,
+  totalPages,
+  onPageChange,
+  className = ''
+}: {
+  page: number;
+  totalPages: number;
+  onPageChange: (page: number) => void;
+  className?: string;
+}) {
+  if (totalPages <= 1) return null;
+
+  return (
+    <div className={`flex flex-wrap items-center justify-between gap-3 text-sm text-white/60 ${className}`}>
+      <button
+        type="button"
+        onClick={() => onPageChange(Math.max(1, page - 1))}
+        disabled={page <= 1}
+        className="inline-flex items-center gap-1 rounded-full border border-white/10 px-3 py-1.5 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        <ChevronLeft className="h-4 w-4" />
+        Anterior
+      </button>
+      <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5">
+        Pagina {page} de {totalPages}
+      </span>
+      <button
+        type="button"
+        onClick={() => onPageChange(Math.min(totalPages, page + 1))}
+        disabled={page >= totalPages}
+        className="inline-flex items-center gap-1 rounded-full border border-white/10 px-3 py-1.5 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        Siguiente
+        <ChevronRight className="h-4 w-4" />
+      </button>
+    </div>
+  );
+}
+
 function SummaryLine({ label, value, strong = false }: { label: string; value: number; strong?: boolean }) {
   return (
     <div className={`mt-3 flex items-center justify-between ${strong ? 'text-lg font-semibold text-white' : 'text-sm text-white/[0.65]'}`}>
@@ -2350,6 +2579,16 @@ function formatNumber(value: number | string) {
 
 function formatMoney(value: number | string) {
   return Number(value).toLocaleString('en-US', { maximumFractionDigits: 0 });
+}
+
+function paginate<T>(items: T[], page: number, pageSize: number) {
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  const safePage = Math.max(1, Math.min(page, totalPages));
+  const start = (safePage - 1) * pageSize;
+  return {
+    items: items.slice(start, start + pageSize),
+    totalPages
+  };
 }
 
 function formatReviewDate(value: string) {

@@ -430,6 +430,56 @@ app.get('/api/promotions', async (_req, res, next) => {
   }
 });
 
+app.post('/api/admin/promotions', requireAdmin, async (req, res, next) => {
+  try {
+    const code = String(req.body.code ?? '').trim().toUpperCase();
+    const description = String(req.body.description ?? '').trim();
+    const discountType = String(req.body.discountType ?? req.body.discount_type ?? 'percent').trim();
+    const discountValue = Number(req.body.discountValue ?? req.body.discount_value);
+
+    if (!/^[A-Z0-9_-]{3,40}$/.test(code)) {
+      res.status(400).json({ error: 'codigo de cupon invalido' });
+      return;
+    }
+    if (description.length < 3 || description.length > 180) {
+      res.status(400).json({ error: 'descripcion de cupon invalida' });
+      return;
+    }
+    if (!['percent', 'fixed'].includes(discountType)) {
+      res.status(400).json({ error: 'tipo de descuento invalido' });
+      return;
+    }
+    if (!Number.isFinite(discountValue) || discountValue <= 0 || (discountType === 'percent' && discountValue > 90)) {
+      res.status(400).json({ error: 'valor de descuento invalido' });
+      return;
+    }
+
+    if (config.useMockData) {
+      res.status(201).json({ code, description, discount_type: discountType, discount_value: discountValue, active: true });
+      return;
+    }
+
+    await pool.query(
+      `
+        INSERT INTO promotions (code, description, discount_type, discount_value, active)
+        VALUES (?, ?, ?, ?, 1)
+        ON DUPLICATE KEY UPDATE
+          description = VALUES(description),
+          discount_type = VALUES(discount_type),
+          discount_value = VALUES(discount_value),
+          active = 1,
+          starts_at = NULL,
+          ends_at = NULL
+      `,
+      [code, description, discountType, discountValue]
+    );
+
+    res.status(201).json({ code, description, discount_type: discountType, discount_value: discountValue, active: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post('/api/auth/login', async (req, res, next) => {
   try {
     const payload = parseLoginPayload(req.body);
