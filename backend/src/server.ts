@@ -31,6 +31,7 @@ import {
 } from './localStore.js';
 import { startMetricsWorker } from './metrics.js';
 import { getReviewsCollection, isMongoConfigured, ProductReviewDocument, toReviewResponse } from './mongo.js';
+import { buildAdminReportWorkbook } from './reportWorkbook.js';
 import {
   OrderItemInput,
   parseLoginPayload,
@@ -1344,6 +1345,166 @@ app.get('/api/admin/reports', requireAdmin, async (_req, res, next) => {
       ordersByStatus: ordersByStatus[0],
       promotionUsage: promotionUsage[0]
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/admin/reports/export', requireAdmin, async (_req, res, next) => {
+  try {
+    if (config.useMockData) {
+      const workbook = await buildAdminReportWorkbook({
+        summary: {
+          totalRevenue: 0,
+          orderCount: 0,
+          averageTicket: 0,
+          activeProducts: 0,
+          lowStockCount: 0,
+          userCount: 0,
+          totalDiscount: 0
+        },
+        revenueByCategory: [],
+        topProducts: [],
+        ordersByStatus: [],
+        promotionUsage: [],
+        latestOrders: [],
+        lowStock: [],
+        inventory: []
+      });
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="forge-core-reportes-${new Date().toISOString().slice(0, 10)}.xlsx"`);
+      res.send(workbook);
+      return;
+    }
+
+    const [
+      summaryResult,
+      productCountersResult,
+      userCountersResult,
+      revenueByCategoryResult,
+      topProductsResult,
+      ordersByStatusResult,
+      promotionUsageResult,
+      latestOrdersResult,
+      lowStockResult,
+      inventoryResult
+    ] = await Promise.all([
+      pool.query<RowDataPacket[]>(
+        `
+          SELECT COALESCE(SUM(total), 0) AS totalRevenue,
+                 COUNT(*) AS orderCount,
+                 COALESCE(AVG(total), 0) AS averageTicket,
+                 COALESCE(SUM(discount), 0) AS totalDiscount
+          FROM orders
+          WHERE status = 'paid_simulated'
+        `
+      ),
+      pool.query<RowDataPacket[]>(
+        `
+          SELECT COALESCE(SUM(CASE WHEN active = 1 THEN 1 ELSE 0 END), 0) AS activeProducts,
+                 COALESCE(SUM(CASE WHEN active = 1 AND stock <= 5 THEN 1 ELSE 0 END), 0) AS lowStockCount
+          FROM products
+        `
+      ),
+      pool.query<RowDataPacket[]>('SELECT COUNT(*) AS userCount FROM users'),
+      pool.query<RowDataPacket[]>(
+        `
+          SELECT c.name AS category, COALESCE(SUM(oi.line_total), 0) AS revenue, COALESCE(SUM(oi.quantity), 0) AS units
+          FROM order_items oi
+          JOIN products p ON p.id = oi.product_id
+          JOIN categories c ON c.id = p.category_id
+          GROUP BY c.name
+          ORDER BY revenue DESC
+        `
+      ),
+      pool.query<RowDataPacket[]>(
+        `
+          SELECT product_name, COALESCE(SUM(quantity), 0) AS units, COALESCE(SUM(line_total), 0) AS revenue
+          FROM order_items
+          GROUP BY product_name
+          ORDER BY units DESC, revenue DESC
+          LIMIT 20
+        `
+      ),
+      pool.query<RowDataPacket[]>(
+        `
+          SELECT fulfillment_status, COUNT(*) AS total
+          FROM orders
+          GROUP BY fulfillment_status
+          ORDER BY total DESC
+        `
+      ),
+      pool.query<RowDataPacket[]>(
+        `
+          SELECT COALESCE(promotion_code, 'SIN_CUPON') AS promotion_code,
+                 COUNT(*) AS orders,
+                 COALESCE(SUM(discount), 0) AS discount_total
+          FROM orders
+          GROUP BY promotion_code
+          ORDER BY discount_total DESC, orders DESC
+        `
+      ),
+      pool.query<RowDataPacket[]>(
+        `
+          SELECT id, customer_name, customer_email, payment_reference, total, status,
+                 fulfillment_status, promotion_code, created_at
+          FROM orders
+          ORDER BY created_at DESC
+          LIMIT 30
+        `
+      ),
+      pool.query<RowDataPacket[]>(
+        `
+          SELECT p.id, p.name, c.name AS category, b.name AS brand, p.stock
+          FROM products p
+          JOIN categories c ON c.id = p.category_id
+          JOIN brands b ON b.id = p.brand_id
+          WHERE p.active = 1 AND p.stock <= 5
+          ORDER BY p.stock ASC, p.name ASC
+          LIMIT 30
+        `
+      ),
+      pool.query<RowDataPacket[]>(
+        `
+          SELECT p.id, p.name, c.name AS category, b.name AS brand,
+                 p.price, p.stock, p.rating, p.active
+          FROM products p
+          JOIN categories c ON c.id = p.category_id
+          JOIN brands b ON b.id = p.brand_id
+          ORDER BY p.active DESC, p.stock ASC, p.name ASC
+        `
+      )
+    ]);
+
+    const summaryRows = summaryResult[0] as RowDataPacket[];
+    const productCounterRows = productCountersResult[0] as RowDataPacket[];
+    const userCounterRows = userCountersResult[0] as RowDataPacket[];
+    const summary = summaryRows[0] ?? {};
+    const productCounters = productCounterRows[0] ?? {};
+    const userCounters = userCounterRows[0] ?? {};
+
+    const workbook = await buildAdminReportWorkbook({
+      summary: {
+        totalRevenue: Number(summary.totalRevenue ?? 0),
+        orderCount: Number(summary.orderCount ?? 0),
+        averageTicket: Number(summary.averageTicket ?? 0),
+        activeProducts: Number(productCounters.activeProducts ?? 0),
+        lowStockCount: Number(productCounters.lowStockCount ?? 0),
+        userCount: Number(userCounters.userCount ?? 0),
+        totalDiscount: Number(summary.totalDiscount ?? 0)
+      },
+      revenueByCategory: revenueByCategoryResult[0] as RowDataPacket[],
+      topProducts: topProductsResult[0] as RowDataPacket[],
+      ordersByStatus: ordersByStatusResult[0] as RowDataPacket[],
+      promotionUsage: promotionUsageResult[0] as RowDataPacket[],
+      latestOrders: latestOrdersResult[0] as RowDataPacket[],
+      lowStock: lowStockResult[0] as RowDataPacket[],
+      inventory: inventoryResult[0] as RowDataPacket[]
+    });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="forge-core-reportes-${new Date().toISOString().slice(0, 10)}.xlsx"`);
+    res.send(workbook);
   } catch (error) {
     next(error);
   }

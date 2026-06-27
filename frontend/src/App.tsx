@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Cpu,
   Database,
+  Download,
   Gauge,
   LockKeyhole,
   LogOut,
@@ -378,6 +379,7 @@ function App() {
   const [availablePromotions, setAvailablePromotions] = useState<Promotion[]>([]);
   const [editingProductId, setEditingProductId] = useState<number | null>(null);
   const [adminReports, setAdminReports] = useState<AdminReports | null>(null);
+  const [reportExportStatus, setReportExportStatus] = useState<'idle' | 'loading' | 'error'>('idle');
   const [adminProductForm, setAdminProductForm] = useState<AdminProductForm>(() => createDemoProductForm());
   const [adminSaveStatus, setAdminSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle');
   const [adminSaveMessage, setAdminSaveMessage] = useState('');
@@ -1082,6 +1084,31 @@ function App() {
     } catch (error) {
       setAdminPromotionStatus('failed');
       setAdminPromotionMessage(error instanceof Error ? error.message : 'No se pudo guardar el cupon');
+    }
+  }
+
+  async function exportAdminReports() {
+    setReportExportStatus('loading');
+
+    try {
+      const response = await apiFetch('/api/admin/reports/export');
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error ?? 'No se pudo generar el Excel');
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `forge-core-reportes-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      setReportExportStatus('idle');
+    } catch {
+      setReportExportStatus('error');
     }
   }
 
@@ -2104,8 +2131,23 @@ function App() {
                     </h3>
                     <p className="mt-1 text-sm text-white/50">Ventas por categoria, top productos, estados y uso de cupones.</p>
                   </div>
-                  <span className="rounded-full border border-cyan-200/20 px-3 py-1 text-xs uppercase tracking-[0.16em] text-cyan-100">MariaDB</span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full border border-cyan-200/20 px-3 py-1 text-xs uppercase tracking-[0.16em] text-cyan-100">MariaDB</span>
+                    <button
+                      onClick={exportAdminReports}
+                      disabled={reportExportStatus === 'loading'}
+                      className="inline-flex items-center gap-2 rounded-full border border-cyan-200/25 bg-cyan-300 px-4 py-2 text-sm font-semibold text-black transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <Download className="h-4 w-4" />
+                      {reportExportStatus === 'loading' ? 'Exportando...' : 'Exportar Excel'}
+                    </button>
+                  </div>
                 </div>
+                {reportExportStatus === 'error' && (
+                  <p className="mt-4 rounded-lg border border-red-300/40 bg-red-300/10 p-3 text-sm text-red-100">
+                    No se pudo generar el Excel. Revisa que el backend y MariaDB esten activos.
+                  </p>
+                )}
                 <div className="mt-5 grid gap-4 lg:grid-cols-4">
                   <ReportMiniList title="Categorias" rows={(adminReports?.revenueByCategory ?? []).map((row) => `${row.category}: $${formatMoney(row.revenue)}`)} />
                   <ReportMiniList title="Top productos" rows={(adminReports?.topProducts ?? []).map((row) => `${row.product_name}: ${row.units} und.`)} />
