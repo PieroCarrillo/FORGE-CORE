@@ -120,6 +120,11 @@ type ChatMessage = {
   recommendations?: AssistantRecommendation[];
 };
 
+type CartToast = {
+  productName: string;
+  quantity: number;
+};
+
 type SystemMetric = {
   cpu_percent: string;
   memory_percent: string;
@@ -377,6 +382,7 @@ function App() {
       text: 'Hola, soy Forge Bot. Puedo recomendarte GPU, CPU, RAM, SSD o fuente leyendo productos de MariaDB y resenas de MongoDB. Preguntame algo como: Que grafica me conviene para 4K con $900?'
     }
   ]);
+  const [cartToast, setCartToast] = useState<CartToast | null>(null);
 
   const featuredProducts = useMemo(() => productList.slice(0, Math.min(5, productList.length)), [productList]);
   const featuredProduct = featuredProducts[carouselIndex % Math.max(featuredProducts.length, 1)] ?? seedProducts[0];
@@ -393,6 +399,7 @@ function App() {
   }, [category, productList, search]);
 
   const subtotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const cartQuantity = cart.reduce((sum, item) => sum + item.quantity, 0);
   const tax = subtotal * 0.18;
   const shipping = subtotal > 0 ? 25 : 0;
   const normalizedPromotionCode = promotionCode.trim().toUpperCase();
@@ -603,6 +610,12 @@ function App() {
       setView('catalogo');
     }
   }, [canManageProducts, view]);
+
+  useEffect(() => {
+    if (!cartToast) return;
+    const timer = window.setTimeout(() => setCartToast(null), 2600);
+    return () => window.clearTimeout(timer);
+  }, [cartToast]);
 
   async function loadPersistentCart() {
     try {
@@ -842,13 +855,17 @@ function App() {
 
   function addToCart(product: Product) {
     if (product.stock <= 0) return;
+    const existingCartItem = cart.find((item) => item.id === product.id);
+    const toastQuantity = existingCartItem ? Math.min(existingCartItem.quantity + 1, product.stock) : 1;
     setCart((items) => {
       const existing = items.find((item) => item.id === product.id);
       if (existing) {
-        return items.map((item) => (item.id === product.id ? { ...item, quantity: Math.min(item.quantity + 1, product.stock) } : item));
+        const nextQuantity = Math.min(existing.quantity + 1, product.stock);
+        return items.map((item) => (item.id === product.id ? { ...item, quantity: nextQuantity } : item));
       }
       return [...items, { ...product, quantity: 1 }];
     });
+    setCartToast({ productName: product.name, quantity: toastQuantity });
     setPaymentStatus('idle');
   }
 
@@ -1263,7 +1280,14 @@ function App() {
                   view === item.view ? 'bg-cyan-300 text-black' : 'text-white/70 hover:text-white'
                 }`}
               >
-                {item.label}
+                <span className="inline-flex items-center gap-1.5">
+                  {item.label}
+                  {item.view === 'carrito' && cartQuantity > 0 && (
+                    <span className={`inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] font-semibold ${view === item.view ? 'bg-black text-cyan-200' : 'bg-cyan-300 text-black'}`}>
+                      {cartQuantity}
+                    </span>
+                  )}
+                </span>
               </button>
             ))}
           </div>
@@ -1428,6 +1452,28 @@ function App() {
                       Agregar al carrito
                     </button>
                   </div>
+                </div>
+              </div>
+              <div className="mt-5 rounded-lg border border-white/10 bg-[#11151d]/[0.92] p-5 backdrop-blur">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.22em] text-cyan-200">Comunidad del producto</p>
+                    <h3 className="mt-2 text-2xl font-semibold">Opiniones sobre {selected.name}</h3>
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-white/[0.06] px-4 py-3 text-right">
+                    <p className="text-2xl font-semibold text-white">{averageRating(productReviews)}</p>
+                    <p className="text-xs uppercase tracking-[0.14em] text-white/45">{productReviews.length} resenas</p>
+                  </div>
+                </div>
+                <div className="mt-5 grid gap-3 lg:grid-cols-2">
+                  {productReviews.slice(0, 6).map((review) => (
+                    <ReviewCard key={review.id} review={review} onHelpful={markReviewHelpful} />
+                  ))}
+                  {!productReviews.length && (
+                    <div className="rounded-lg border border-white/10 bg-white/[0.04] p-5 text-sm text-white/55 lg:col-span-2">
+                      Este producto todavia no tiene resenas publicadas. Puedes crear una desde Comunidad.
+                    </div>
+                  )}
                 </div>
               </div>
             </section>
@@ -1884,6 +1930,20 @@ function App() {
             </section>
           )}
         </main>
+        {cartToast && (
+          <div className="fixed bottom-24 right-5 z-50 w-[min(360px,calc(100vw-2.5rem))] rounded-lg border border-cyan-200/25 bg-[#0d1118]/95 p-4 shadow-[0_0_34px_rgba(73,240,255,0.22)] backdrop-blur-xl">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-cyan-300 text-black">
+                <ShoppingCart className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <p className="font-semibold text-white">Producto agregado</p>
+                <p className="mt-1 truncate text-sm text-white/60">{cartToast.productName}</p>
+                <p className="mt-2 text-xs uppercase tracking-[0.14em] text-cyan-100/60">Cantidad en carrito: {cartToast.quantity}</p>
+              </div>
+            </div>
+          </div>
+        )}
         <AssistantBubble
           open={assistantOpen}
           messages={assistantMessages}
