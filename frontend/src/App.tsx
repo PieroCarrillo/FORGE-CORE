@@ -1021,14 +1021,7 @@ function App() {
                   El usuario master entra como admin. Los clientes solo ven catalogo, carrito, perfil y sus ultimos pedidos.
                 </p>
               </div>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                <DemoAccessCard
-                  title="Admin master"
-                  subtitle="Inventario, usuarios, pedidos y metricas."
-                  user="master"
-                  password="MasterForge2026!"
-                  onClick={() => quickLogin('master', 'MasterForge2026!')}
-                />
+              <div className="grid gap-3 sm:grid-cols-2">
                 <DemoAccessCard
                   title="Cliente demo"
                   subtitle="Compra simulada y perfil de pedidos."
@@ -1042,6 +1035,14 @@ function App() {
                   user="vendedor"
                   password="VendedorForge2026!"
                   onClick={() => quickLogin('vendedor', 'VendedorForge2026!')}
+                />
+                <DemoAccessCard
+                  title="Admin master"
+                  subtitle="Control completo de usuarios, inventario, pedidos, reportes, metricas del servidor y moderacion."
+                  user="master"
+                  password="MasterForge2026!"
+                  featured
+                  onClick={() => quickLogin('master', 'MasterForge2026!')}
                 />
               </div>
             </div>
@@ -1819,12 +1820,38 @@ function ProductVisual({ product, large = false }: { product: Product; large?: b
   );
 }
 
-function DemoAccessCard({ title, subtitle, user, password, onClick }: { title: string; subtitle: string; user: string; password: string; onClick: () => void }) {
+function DemoAccessCard({
+  title,
+  subtitle,
+  user,
+  password,
+  featured = false,
+  onClick
+}: {
+  title: string;
+  subtitle: string;
+  user: string;
+  password: string;
+  featured?: boolean;
+  onClick: () => void;
+}) {
   return (
-    <button type="button" onClick={onClick} className="rounded-lg border border-white/10 bg-white/[0.06] p-4 text-left transition hover:border-cyan-200/50 hover:bg-white/[0.1]">
-      <p className="font-semibold">{title}</p>
-      <p className="mt-1 text-sm text-white/55">{subtitle}</p>
-      <p className="mt-3 text-xs text-cyan-100/70">{user} / {password}</p>
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-lg border p-4 text-left transition hover:border-cyan-200/50 hover:bg-white/[0.1] ${
+        featured ? 'sm:col-span-2 border-cyan-200/20 bg-cyan-200/[0.08] p-5' : 'border-white/10 bg-white/[0.06]'
+      }`}
+    >
+      <div className={featured ? 'grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end' : ''}>
+        <div>
+          <p className={featured ? 'text-xl font-semibold' : 'font-semibold'}>{title}</p>
+          <p className={`${featured ? 'mt-2 max-w-md' : 'mt-1'} text-sm leading-6 text-white/55`}>{subtitle}</p>
+        </div>
+        <p className="mt-3 break-all rounded-md border border-cyan-100/10 bg-black/20 px-3 py-2 text-xs text-cyan-100/75 sm:mt-0">
+          {user} / {password}
+        </p>
+      </div>
     </button>
   );
 }
