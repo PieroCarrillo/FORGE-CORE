@@ -85,6 +85,20 @@ type ResetUserRow = RowDataPacket & {
   id: number;
 };
 
+type AssistantProduct = ReturnType<typeof toProduct> & {
+  reviewCount: number;
+  reviewAverage: number;
+  reviewSnippets: string[];
+};
+
+type AssistantReviewSignal = {
+  productId: number;
+  rating: number;
+  title: string;
+  comment: string;
+  helpfulCount: number;
+};
+
 const app = express();
 
 // Middlewares globales: CORS para el frontend y JSON para recibir payloads.
@@ -222,6 +236,119 @@ async function quoteOrderItems(items: OrderItemInput[], promotionCode = '') {
     promotionCode: promotion?.code ?? '',
     promotionDescription: promotion?.description ?? '',
     total: subtotal + tax + shipping - discount
+  };
+}
+
+function normalizeText(value: string) {
+  return value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function detectAssistantCategory(message: string) {
+  const text = normalizeText(message);
+  const rules: Array<{ category: string; keywords: string[] }> = [
+    { category: 'GPU', keywords: ['gpu', 'grafica', 'tarjeta de video', 'video', '4k', 'ray tracing', 'dlss', 'render', 'ia'] },
+    { category: 'CPU', keywords: ['cpu', 'procesador', 'nucleos', 'hilos', 'streaming', 'compilar', 'multitarea'] },
+    { category: 'RAM', keywords: ['ram', 'memoria', 'ddr5', 'ddr4', 'gb', 'rgb'] },
+    { category: 'SSD', keywords: ['ssd', 'nvme', 'almacenamiento', 'disco', 'cargas', 'juegos pesados'] },
+    { category: 'Fuente', keywords: ['fuente', 'psu', 'watts', 'watt', 'energia', '1000w', '850w'] }
+  ];
+
+  return rules.find((rule) => rule.keywords.some((keyword) => text.includes(keyword)))?.category ?? '';
+}
+
+function detectAssistantBudget(message: string) {
+  const matches = normalizeText(message).match(/\b\d{2,5}\b/g) ?? [];
+  const values = matches.map(Number).filter((value) => value >= 50);
+  return values.length ? Math.max(...values) : null;
+}
+
+function detectAssistantIntent(message: string) {
+  const text = normalizeText(message);
+  return {
+    gaming: ['gaming', 'jugar', 'fps', '4k', '1440p', 'ultra'].some((word) => text.includes(word)),
+    creator: ['render', 'edicion', 'streaming', 'ia', '3d', 'productividad'].some((word) => text.includes(word)),
+    compact: ['compacto', 'mini', 'pequeno', 'itx'].some((word) => text.includes(word)),
+    upgrade: ['mejorar', 'upgrade', 'actualizar'].some((word) => text.includes(word))
+  };
+}
+
+function scoreAssistantProduct(product: AssistantProduct, message: string, category: string, budget: number | null) {
+  const text = normalizeText(message);
+  const haystack = normalizeText([product.name, product.brand, product.category, product.description, product.specs.join(' ')].join(' '));
+  const intent = detectAssistantIntent(message);
+  let score = Number(product.rating) * 8 + product.reviewAverage * 5 + Math.min(product.reviewCount, 8) * 2;
+
+  if (category && product.category === category) score += 60;
+  if (product.stock > 0) score += 12;
+  if (budget && product.price <= budget) score += 25;
+  if (budget && product.price > budget) score -= Math.min(35, (product.price - budget) / 35);
+  if (intent.gaming && ['GPU', 'CPU', 'RAM'].includes(product.category)) score += 12;
+  if (intent.creator && ['GPU', 'CPU', 'SSD'].includes(product.category)) score += 10;
+  if (intent.compact && haystack.includes('compact')) score += 8;
+  if (intent.upgrade && product.price < 700) score += 8;
+
+  for (const token of text.split(/\s+/).filter((word) => word.length > 3)) {
+    if (haystack.includes(token)) score += 2;
+  }
+
+  return score;
+}
+
+function summarizeAssistantReviews(reviews: AssistantReviewSignal[]) {
+  const grouped = new Map<number, AssistantReviewSignal[]>();
+  for (const review of reviews) {
+    const current = grouped.get(review.productId) ?? [];
+    current.push(review);
+    grouped.set(review.productId, current);
+  }
+  return grouped;
+}
+
+function buildAssistantReply(message: string, products: AssistantProduct[]) {
+  const category = detectAssistantCategory(message);
+  const budget = detectAssistantBudget(message);
+  const scored = products
+    .map((product) => ({
+      product,
+      score: scoreAssistantProduct(product, message, category, budget)
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3)
+    .map((item) => item.product);
+
+  if (!scored.length) {
+    return {
+      reply: 'No encontre productos activos suficientes para recomendar ahora. Revisa el catalogo o intenta una pregunta mas especifica.',
+      recommendations: []
+    };
+  }
+
+  const main = scored[0];
+  const categoryText = category ? ` para ${category}` : '';
+  const budgetText = budget ? ` y considerando un presupuesto cercano a $${budget}` : '';
+  const reviewText = main.reviewCount
+    ? ` Tiene ${main.reviewCount} resena(s) con promedio ${main.reviewAverage.toFixed(1)}/5; eso ayuda a validar la recomendacion con opiniones reales.`
+    : ' Aun no tiene muchas resenas, asi que priorice sus especificaciones, stock y precio.';
+  const snippets = main.reviewSnippets.length ? ` Comentarios destacados: ${main.reviewSnippets.slice(0, 2).join(' | ')}` : '';
+
+  return {
+    reply: `Te recomendaria empezar con ${main.name}${categoryText}${budgetText}. Es ${main.category}, cuesta $${main.price.toLocaleString('en-US')} y tiene stock ${main.stock}.${reviewText}${snippets} Tambien puedes comparar con ${scored.slice(1).map((product) => product.name).join(' y ') || 'otros productos del catalogo'}.`,
+    recommendations: scored.map((product) => ({
+      id: product.id,
+      slug: product.slug,
+      name: product.name,
+      category: product.category,
+      brand: product.brand,
+      price: product.price,
+      stock: product.stock,
+      rating: product.rating,
+      imageUrl: product.imageUrl,
+      reviewCount: product.reviewCount,
+      reviewAverage: Number(product.reviewAverage.toFixed(1))
+    }))
   };
 }
 
@@ -490,6 +617,95 @@ app.get('/api/products', async (req, res, next) => {
       params
     );
     res.json(rows.map(toProduct));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/assistant/chat', requireAuth, async (req: AuthRequest, res, next) => {
+  try {
+    const message = String(req.body.message ?? '').trim();
+    if (message.length < 3 || message.length > 700) {
+      res.status(400).json({ error: 'La pregunta debe tener entre 3 y 700 caracteres' });
+      return;
+    }
+
+    if (config.useMockData) {
+      const reviews = listLocalAdminReviews()
+        .filter((review) => review.status === 'published')
+        .map((review) => ({
+          productId: review.productId,
+          rating: review.rating,
+          title: review.title,
+          comment: review.comment,
+          helpfulCount: review.helpfulCount
+        }));
+      const groupedReviews = summarizeAssistantReviews(reviews);
+      const products = listLocalProducts('', '').map((product) => {
+        const productReviews = groupedReviews.get(product.id) ?? [];
+        const reviewAverage = productReviews.length
+          ? productReviews.reduce((sum, review) => sum + review.rating, 0) / productReviews.length
+          : Number(product.rating);
+        return {
+          ...product,
+          reviewCount: productReviews.length,
+          reviewAverage,
+          reviewSnippets: productReviews.slice(0, 3).map((review) => `${review.title}: ${review.comment.slice(0, 90)}`)
+        } as AssistantProduct;
+      });
+      res.json(buildAssistantReply(message, products));
+      return;
+    }
+
+    const [rows] = await pool.query<ProductRow[]>(
+      `
+        SELECT p.id, p.slug, p.name, c.name AS category_name, b.name AS brand_name,
+               p.price, p.stock, p.rating, p.description, p.image_url, p.specs_json, p.active
+        FROM products p
+        JOIN categories c ON c.id = p.category_id
+        JOIN brands b ON b.id = p.brand_id
+        WHERE p.active = 1
+        ORDER BY p.stock DESC, p.rating DESC, p.created_at DESC
+        LIMIT 80
+      `
+    );
+
+    let reviews: AssistantReviewSignal[] = [];
+    if (isMongoConfigured()) {
+      const collection = await getReviewsCollection();
+      const reviewDocs = await collection
+        .find({ status: 'published' })
+        .sort({ helpfulCount: -1, createdAt: -1 })
+        .limit(200)
+        .toArray();
+      reviews = reviewDocs.map((review) => ({
+        productId: review.productId,
+        rating: review.rating,
+        title: review.title,
+        comment: review.comment,
+        helpfulCount: review.helpfulCount
+      }));
+    }
+
+    const groupedReviews = summarizeAssistantReviews(reviews);
+    const products = rows.map((row) => {
+      const product = toProduct(row);
+      const productReviews = groupedReviews.get(product.id) ?? [];
+      const reviewAverage = productReviews.length
+        ? productReviews.reduce((sum, review) => sum + review.rating, 0) / productReviews.length
+        : Number(product.rating);
+      return {
+        ...product,
+        reviewCount: productReviews.length,
+        reviewAverage,
+        reviewSnippets: productReviews
+          .sort((a, b) => b.helpfulCount - a.helpfulCount || b.rating - a.rating)
+          .slice(0, 3)
+          .map((review) => `${review.title}: ${review.comment.slice(0, 90)}`)
+      };
+    });
+
+    res.json(buildAssistantReply(message, products));
   } catch (error) {
     next(error);
   }

@@ -1,6 +1,7 @@
 import {
   Activity,
   BarChart3,
+  Bot,
   Box,
   ChevronLeft,
   ChevronRight,
@@ -17,6 +18,7 @@ import {
   PackageCheck,
   Plus,
   Search,
+  Send,
   Settings,
   ShieldCheck,
   ShoppingCart,
@@ -27,7 +29,8 @@ import {
   Truck,
   UserCircle,
   UserPlus,
-  Users
+  Users,
+  X
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
@@ -94,6 +97,27 @@ type ProductReview = {
   helpfulCount: number;
   status: 'published' | 'hidden';
   createdAt: string;
+};
+
+type AssistantRecommendation = {
+  id: number;
+  slug: string;
+  name: string;
+  category: Category;
+  brand: string;
+  price: number;
+  stock: number;
+  rating: number;
+  imageUrl: string;
+  reviewCount: number;
+  reviewAverage: number;
+};
+
+type ChatMessage = {
+  id: string;
+  role: 'assistant' | 'user';
+  text: string;
+  recommendations?: AssistantRecommendation[];
 };
 
 type SystemMetric = {
@@ -343,6 +367,16 @@ function App() {
   const [adminProductForm, setAdminProductForm] = useState<AdminProductForm>(() => createDemoProductForm());
   const [adminSaveStatus, setAdminSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle');
   const [adminSaveMessage, setAdminSaveMessage] = useState('');
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [assistantInput, setAssistantInput] = useState('');
+  const [assistantStatus, setAssistantStatus] = useState<'idle' | 'thinking' | 'error'>('idle');
+  const [assistantMessages, setAssistantMessages] = useState<ChatMessage[]>([
+    {
+      id: 'welcome',
+      role: 'assistant',
+      text: 'Hola, soy Forge Bot. Puedo recomendarte GPU, CPU, RAM, SSD o fuente leyendo productos de MariaDB y resenas de MongoDB. Preguntame algo como: Que grafica me conviene para 4K con $900?'
+    }
+  ]);
 
   const featuredProducts = useMemo(() => productList.slice(0, Math.min(5, productList.length)), [productList]);
   const featuredProduct = featuredProducts[carouselIndex % Math.max(featuredProducts.length, 1)] ?? seedProducts[0];
@@ -745,6 +779,65 @@ function App() {
     setSelected(product);
     setView('detalle');
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function openAssistantRecommendation(recommendation: AssistantRecommendation) {
+    const product = productList.find((item) => item.id === recommendation.id);
+    if (product) {
+      openProduct(product);
+      setAssistantOpen(false);
+      return;
+    }
+    setSearch(recommendation.name);
+    setView('catalogo');
+    setAssistantOpen(false);
+  }
+
+  async function sendAssistantMessage(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+    const message = assistantInput.trim();
+    if (!message || assistantStatus === 'thinking') return;
+
+    const userMessage: ChatMessage = {
+      id: `user-${Date.now()}`,
+      role: 'user',
+      text: message
+    };
+    setAssistantMessages((messages) => [...messages, userMessage]);
+    setAssistantInput('');
+    setAssistantStatus('thinking');
+
+    try {
+      const response = await apiFetch('/api/assistant/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message })
+      });
+      const data = (await response.json()) as { reply?: string; recommendations?: AssistantRecommendation[]; error?: string };
+      if (!response.ok) {
+        throw new Error(data.error ?? 'No pude responder ahora');
+      }
+      setAssistantMessages((messages) => [
+        ...messages,
+        {
+          id: `assistant-${Date.now()}`,
+          role: 'assistant',
+          text: data.reply ?? 'Ya revise el catalogo y las resenas, pero no encontre una recomendacion clara.',
+          recommendations: data.recommendations ?? []
+        }
+      ]);
+      setAssistantStatus('idle');
+    } catch (error) {
+      setAssistantStatus('error');
+      setAssistantMessages((messages) => [
+        ...messages,
+        {
+          id: `assistant-error-${Date.now()}`,
+          role: 'assistant',
+          text: error instanceof Error ? error.message : 'No pude responder ahora. Intenta otra pregunta.'
+        }
+      ]);
+    }
   }
 
   function addToCart(product: Product) {
@@ -1791,6 +1884,16 @@ function App() {
             </section>
           )}
         </main>
+        <AssistantBubble
+          open={assistantOpen}
+          messages={assistantMessages}
+          input={assistantInput}
+          status={assistantStatus}
+          onOpenChange={setAssistantOpen}
+          onInputChange={setAssistantInput}
+          onSend={sendAssistantMessage}
+          onOpenRecommendation={openAssistantRecommendation}
+        />
       </div>
     </Shell>
   );
@@ -1803,6 +1906,106 @@ function Shell({ children }: { children: ReactNode }) {
       <div className="fixed inset-0 bg-[#090b10]/[0.78]" />
       <div className="fixed inset-x-0 top-0 h-48 bg-gradient-to-b from-black/[0.55] to-transparent" />
       <div className="relative z-10">{children}</div>
+    </div>
+  );
+}
+
+function AssistantBubble({
+  open,
+  messages,
+  input,
+  status,
+  onOpenChange,
+  onInputChange,
+  onSend,
+  onOpenRecommendation
+}: {
+  open: boolean;
+  messages: ChatMessage[];
+  input: string;
+  status: 'idle' | 'thinking' | 'error';
+  onOpenChange: (open: boolean) => void;
+  onInputChange: (value: string) => void;
+  onSend: (event?: FormEvent<HTMLFormElement>) => void;
+  onOpenRecommendation: (recommendation: AssistantRecommendation) => void;
+}) {
+  return (
+    <div className="fixed bottom-5 right-5 z-50 flex max-w-[calc(100vw-2.5rem)] flex-col items-end gap-3">
+      {open && (
+        <section className="w-[min(420px,calc(100vw-2.5rem))] overflow-hidden rounded-lg border border-cyan-200/20 bg-[#0d1118]/95 shadow-[0_0_42px_rgba(73,240,255,0.22)] backdrop-blur-xl">
+          <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-cyan-300 text-black">
+                <Bot className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="font-semibold">Forge Bot</p>
+                <p className="text-xs text-white/45">MariaDB + MongoDB Atlas</p>
+              </div>
+            </div>
+            <button onClick={() => onOpenChange(false)} className="rounded-full p-2 text-white/60 transition hover:bg-white/10 hover:text-white" aria-label="Cerrar chat">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div className="max-h-[430px] space-y-3 overflow-y-auto px-4 py-4">
+            {messages.map((message) => (
+              <div key={message.id} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[88%] rounded-lg border px-3 py-2 ${message.role === 'user' ? 'border-cyan-200/20 bg-cyan-300 text-black' : 'border-white/10 bg-white/[0.06] text-white'}`}>
+                  <p className="text-sm leading-6">{message.text}</p>
+                  {!!message.recommendations?.length && (
+                    <div className="mt-3 space-y-2">
+                      {message.recommendations.map((recommendation) => (
+                        <button
+                          key={recommendation.id}
+                          onClick={() => onOpenRecommendation(recommendation)}
+                          className="grid w-full grid-cols-[54px_1fr] gap-3 rounded-md border border-white/10 bg-black/25 p-2 text-left transition hover:border-cyan-200/40 hover:bg-white/10"
+                        >
+                          <img src={recommendation.imageUrl} alt={recommendation.name} className="h-14 w-14 rounded-md object-cover" />
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm font-semibold text-white">{recommendation.name}</span>
+                            <span className="mt-1 block text-xs text-white/50">
+                              {recommendation.category} | ${recommendation.price.toLocaleString('en-US')} | Stock {recommendation.stock}
+                            </span>
+                            <span className="mt-1 block text-xs text-cyan-100/65">
+                              {recommendation.reviewCount} resenas | {recommendation.reviewAverage}/5
+                            </span>
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+            {status === 'thinking' && (
+              <div className="w-fit rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2 text-sm text-white/60">
+                Revisando catalogo y resenas...
+              </div>
+            )}
+          </div>
+
+          <form onSubmit={onSend} className="flex gap-2 border-t border-white/10 p-3">
+            <input
+              value={input}
+              onChange={(event) => onInputChange(event.target.value)}
+              className="min-w-0 flex-1 rounded-full border border-white/10 bg-black/35 px-4 py-3 text-sm text-white outline-none placeholder:text-white/35"
+              placeholder="Ej: Que grafica elijo para 1440p?"
+            />
+            <button disabled={!input.trim() || status === 'thinking'} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-cyan-300 text-black transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-50" aria-label="Enviar pregunta">
+              <Send className="h-4 w-4" />
+            </button>
+          </form>
+        </section>
+      )}
+
+      <button
+        onClick={() => onOpenChange(!open)}
+        className="flex h-14 w-14 items-center justify-center rounded-full border border-cyan-200/30 bg-cyan-300 text-black shadow-[0_0_34px_rgba(73,240,255,0.34)] transition hover:scale-105 hover:bg-cyan-200"
+        aria-label="Abrir Forge Bot"
+      >
+        {open ? <X className="h-6 w-6" /> : <Bot className="h-6 w-6" />}
+      </button>
     </div>
   );
 }
